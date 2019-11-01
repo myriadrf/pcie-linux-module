@@ -295,8 +295,8 @@ static inline int litepcie_fifo_write(litepcie_channel* fifo, const char __user 
 	litepcie_device *s = litepcie_device_table[0];
 	int ep = fifo->dma_ep;
 	int n, bytes_written = 0;
-	const uint16_t front = litepcie_readl(s, CSR_PCIE_DMA_READER_TABLE_LOOP_STATUS_ADDR(ep));
-
+	//const uint16_t front = litepcie_readl(s, CSR_PCIE_DMA_READER_TABLE_LOOP_STATUS_ADDR(ep));
+	const uint16_t front = litepcie_readl(s, CSR_PCIE_DMA_READER_CURRENT_PACKET_ADDR(ep));
 	while (count > bytes_written)
 	{
 		if (((front + DMA_BUFFER_COUNT) & 0xFFFF) == fifo->index)
