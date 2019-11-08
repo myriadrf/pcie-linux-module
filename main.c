@@ -82,21 +82,22 @@ static int litepcie_open(struct inode *inode, struct file *file)
 	litepcie_device *s;
 	size_t minor;
 	/* find PCI device */
-	printk("opening \n");
 	minor = iminor(inode);
 	s = litepcie_device_table[0];
 	if (minor < 0 || minor > s->ch_cnt)
 		return -ENODEV;
 	if (!s)
 		return -ENODEV;
+#ifdef DEBUG_KERN
 	printk("open %lu\n", minor);
+#endif
 	if (minor == 0)
 		file->private_data = NULL;
 	else if (minor <= s->ch_cnt*2)
 		file->private_data = &s->channels[minor-1];
 	litepcie_writel(s, CSR_CNTRL_TEST_ADDR, 55);
 	if(litepcie_readl(s, CSR_CNTRL_TEST_ADDR) != 55){
-		printk("Register test failed\n");
+		printk(KERN_ERR LITEPCIE_NAME " Register test failed\n");
 		return -EIO;
 	}
 	return 0;
@@ -117,6 +118,9 @@ static int litepcie_dma_start(litepcie_channel* ch, int buf_size)
 	ch->buf_size = buf_size;
 	ch->index = 0;
 	ch->offset = 0;
+#ifdef DEBUG_KERN
+	printk("BUF SIZE: %d\n", buf_size);
+#endif
 
 	if (ch->is_tx) {
 		/* init DMA read */
@@ -137,7 +141,9 @@ static int litepcie_dma_start(litepcie_channel* ch, int buf_size)
 		}
 		litepcie_writel(s,
 			CSR_PCIE_DMA_READER_TABLE_LOOP_PROG_N_ADDR(ep), 1);
+#ifdef DEBUG_KERN
 		printk(KERN_INFO LITEPCIE_NAME " Starting DMA(%d) TX\n", ep);
+#endif
 		litepcie_writel(s, CSR_PCIE_DMA_READER_ENABLE_ADDR(ep), 1);
 	} else {
 		/* init DMA write */
@@ -161,7 +167,9 @@ static int litepcie_dma_start(litepcie_channel* ch, int buf_size)
 		litepcie_writel(s,
 			CSR_PCIE_DMA_WRITER_TABLE_LOOP_PROG_N_ADDR(ep), 1);
 		litepcie_writel(s,CSR_PCIE_DMA_WRITER_ALLOW_REQUESTS_ADDR(ep),1);
+#ifdef DEBUG_KERN
 		printk(KERN_INFO LITEPCIE_NAME " Starting DMA(%d) RX\n", ep);
+#endif
 		litepcie_writel(s, CSR_PCIE_DMA_WRITER_ENABLE_ADDR(ep), 1);
 	}
 	ch->started = 1;
@@ -173,7 +181,10 @@ static int litepcie_dma_stop(litepcie_channel* ch)
 	litepcie_device *s = litepcie_device_table[0];
 	int ep = ch->dma_ep;
 	if (!ch->is_tx) {
+#ifdef DEBUG_KERN
 		printk(KERN_INFO LITEPCIE_NAME " Stop RX DMA(%d)\n", ep);
+		printk(KERN_INFO "RX(%d) End_pckt: %d\n",ep, litepcie_readl(s, CSR_PCIE_DMA_WRITER_TABLE_LOOP_STATUS_ADDR(ep)));
+#endif
 		litepcie_writel(s,CSR_PCIE_DMA_WRITER_ALLOW_REQUESTS_ADDR(ep),0);
 		litepcie_writel(s,
 			CSR_PCIE_DMA_WRITER_TABLE_LOOP_PROG_N_ADDR(ep),	0);
@@ -181,12 +192,19 @@ static int litepcie_dma_stop(litepcie_channel* ch)
 		udelay(100);
 		litepcie_writel(s, CSR_PCIE_DMA_WRITER_ENABLE_ADDR(ep), 0);
 	} else 	{
+#ifdef DEBUG_KERN
 		printk(KERN_INFO LITEPCIE_NAME " Stop TX DMA(%d)\n", ep);
+		printk(KERN_INFO "TX(%d) End_pckt: %d\n",ep,litepcie_readl(s, CSR_PCIE_DMA_READER_TABLE_LOOP_STATUS_ADDR(ep)));
+		printk(KERN_INFO "TX(%d) Flush_nbytes: %d\n",ep,litepcie_readl(s, CSR_PCIE_DMA_READER_FLUSH_NBYTES_ADDR(ep)));
+#endif
+		udelay(100);
 		litepcie_writel(s,
 			CSR_PCIE_DMA_READER_TABLE_LOOP_PROG_N_ADDR(ep), 0);
 		litepcie_writel(s, CSR_PCIE_DMA_READER_TABLE_FLUSH_ADDR(ep), 1);
 		udelay(100);
 		litepcie_writel(s, CSR_PCIE_DMA_READER_PACKET_NR_ADDR(ep), 0);
+		litepcie_writel(s, CSR_PCIE_DMA_READER_FLUSH_NR_ADDR(ep), 0);
+		litepcie_writel(s, CSR_PCIE_DMA_READER_FLUSH_NBYTES_ADDR(ep), 0);
 		litepcie_writel(s, CSR_PCIE_DMA_READER_ENABLE_ADDR(ep), 0);
 	}
 	ch->started = 0;
@@ -261,7 +279,8 @@ static inline int litepcie_fifo_read(litepcie_channel* fifo, char __user *buf, c
     int ep = fifo->dma_ep;
     litepcie_device *s = litepcie_device_table[0];
     const uint8_t back = litepcie_readl(s, CSR_PCIE_DMA_WRITER_TABLE_LOOP_STATUS_ADDR(ep));
-
+	if(back == -1)
+	{ printk(KERN_ERR LITEPCIE_NAME " WRONG REGISTER VALUE\n"); return 0;}
     if ((back+DMA_BUFFER_COUNT-fifo->index)%DMA_BUFFER_COUNT > DMA_BUFFER_COUNT*2/3) //assume overflow
     {
         fifo->offset = 0;
@@ -295,8 +314,12 @@ static inline int litepcie_fifo_write(litepcie_channel* fifo, const char __user 
 	litepcie_device *s = litepcie_device_table[0];
 	int ep = fifo->dma_ep;
 	int n, bytes_written = 0;
-	//const uint16_t front = litepcie_readl(s, CSR_PCIE_DMA_READER_TABLE_LOOP_STATUS_ADDR(ep));
+	int timeout;
 	const uint16_t front = litepcie_readl(s, CSR_PCIE_DMA_READER_CURRENT_PACKET_ADDR(ep));
+	
+	if(front == -1)
+	{ printk(KERN_ERR "WRONG REGISTER VALUE\n"); return 0;}
+	
 	while (count > bytes_written)
 	{
 		if (((front + DMA_BUFFER_COUNT) & 0xFFFF) == fifo->index)
@@ -309,6 +332,15 @@ static inline int litepcie_fifo_write(litepcie_channel* fifo, const char __user 
 			copy_from_user(tx_buf, buf+bytes_written, count-bytes_written);
 			//flush
 			//TODO: wait if previous flush has not completed yet
+#ifdef DEBUG_KERN
+			printk("Flush_nr: %d\n", fifo->index + 1);
+			printk("Flush nbytes: %d\n", fifo->offset/8*8);
+#endif
+			timeout = 1000;
+			while (--timeout && litepcie_readl(s, CSR_PCIE_DMA_READER_FLUSH_NBYTES_ADDR(ep)))
+				usleep_range(20, 700);
+			if (timeout == 0)
+				return bytes_written;
 			litepcie_writel(s, CSR_PCIE_DMA_READER_FLUSH_NR_ADDR(ep), ++fifo->index);
 			litepcie_writel(s, CSR_PCIE_DMA_READER_FLUSH_NBYTES_ADDR(ep), fifo->offset/8*8);
 			litepcie_writel(s, CSR_PCIE_DMA_READER_PACKET_NR_ADDR(ep), fifo->index);
@@ -389,7 +421,10 @@ static void litepcie_end(struct pci_dev *dev, litepcie_device *s)
 {
 	int i, j;
 	enum dma_data_direction dir;
+#ifdef DEBUG_KERN
 	printk(KERN_INFO LITEPCIE_NAME " litepcie_end\n");
+#endif
+	
 	for (i = 0; i < s->ch_cnt; i++) {
 		dir = s->channels[i].is_tx ? DMA_TO_DEVICE : DMA_FROM_DEVICE;
 		for (j = 0; j < DMA_BUFFER_COUNT; j++) {
@@ -409,7 +444,9 @@ static void litepcie_pci_remove(struct pci_dev *dev)
 {
     litepcie_device *s = pci_get_drvdata(dev);
     int i, major;
-    printk(KERN_INFO LITEPCIE_NAME " litepcie_pci_remove\n");
+#ifdef DEBUG_KERN
+	printk(KERN_INFO LITEPCIE_NAME " litepcie_pci_remove\n");
+#endif
 
     litepcie_device_table[0] = NULL;
 
@@ -535,8 +572,9 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 	litepcie_device *s = NULL;
 	uint8_t rev_id, ch_cnt;
 	int ret, index, i;
-
+#ifdef KERN_DEBUG
 	printk(KERN_INFO LITEPCIE_NAME " Probing device\n");
+#endif
 
 	for (index = 0; index < LITEPCIE__DEVICE_COUNT; index++)
 		if (!litepcie_device_table[index])
@@ -610,7 +648,9 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 		printk(KERN_ERR LITEPCIE_NAME " Failed to get number of channels\n");
 		goto unmap_io;
 	}
+#ifdef KERN_DEBUG
 	printk(KERN_INFO LITEPCIE_NAME " Nchannels: %d\n",ch_cnt);
+#endif
 	/* allocate DMA buffers */
 	s->channels = kzalloc(sizeof(litepcie_channel)*ch_cnt*2,
 			      DMA_BUFFER_SIZE);
@@ -626,7 +666,9 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 
 
 	litepcie_device_table[index] = s;
+#ifdef KERN_DEBUG
 	printk(KERN_INFO LITEPCIE_NAME " Assigned to %d\n", index);
+#endif
 	ret = litepcie_init_chrdev(s);
 	if (ret)
 	    pci_unregister_driver(&litepcie_pci_driver);
@@ -654,8 +696,10 @@ static int __init litepcie_module_init(void)
     litepcie_class = class_create(THIS_MODULE, LITEPCIE_NAME);
     if (IS_ERR(litepcie_class))
         return PTR_ERR(litepcie_class);
-
-    printk(KERN_INFO LITEPCIE_NAME " Init litepcie module\n");
+#ifdef KERN_DEBUG
+	printk(KERN_INFO LITEPCIE_NAME " Init litepcie module\n");
+#endif
+    
     ret = pci_register_driver(&litepcie_pci_driver);
     if (ret < 0)
     {
@@ -669,7 +713,9 @@ static int __init litepcie_module_init(void)
 static void __exit litepcie_module_exit(void)
 {
     pci_unregister_driver(&litepcie_pci_driver);
-    printk(KERN_INFO LITEPCIE_NAME " litepcie_module_exit\n");
+#ifdef KERN_DEBUG
+	printk(KERN_INFO LITEPCIE_NAME " litepcie_module_exit\n");
+#endif
     class_destroy(litepcie_class);
 }
 
