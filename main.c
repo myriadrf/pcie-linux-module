@@ -278,7 +278,7 @@ static inline int litepcie_fifo_read(litepcie_channel* fifo, char __user *buf, c
     int bytes_read = 0;
     int ep = fifo->dma_ep;
     litepcie_device *s = litepcie_device_table[0];
-    const uint8_t back = litepcie_readl(s, CSR_PCIE_DMA_WRITER_TABLE_LOOP_STATUS_ADDR(ep));
+    const uint8_t back = litepcie_readl(s, CSR_PCIE_DMA_WRITER_CURRENT_PACKET_ADDR(ep));
 	if(back == -1)
 	{ printk(KERN_ERR LITEPCIE_NAME " WRONG REGISTER VALUE\n"); return 0;}
     if ((back+DMA_BUFFER_COUNT-fifo->index)%DMA_BUFFER_COUNT > DMA_BUFFER_COUNT*2/3) //assume overflow
