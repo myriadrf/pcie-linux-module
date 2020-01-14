@@ -2,8 +2,12 @@
 #define __HW_CONFIG_H
 
 /* pci */
-#define PCI_FPGA_VENDOR_ID 0x10EE
-#define PCI_FPGA_DEVICE_ID 0x7022
+// 5G
+//#define PCI_FPGA_VENDOR_ID 0x10EE
+//#define PCI_FPGA_DEVICE_ID 0x7022
+//QPCIE
+#define PCI_FPGA_VENDOR_ID 0x1172
+#define PCI_FPGA_DEVICE_ID 0xe001
 #define PCI_FPGA_BAR0_SIZE 0xa000
 
 /* dma */

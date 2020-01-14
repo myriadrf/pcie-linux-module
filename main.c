@@ -97,7 +97,7 @@ static int litepcie_open(struct inode *inode, struct file *file)
 		file->private_data = &s->channels[minor-1];
 	litepcie_writel(s, CSR_CNTRL_TEST_ADDR, 55);
 	if(litepcie_readl(s, CSR_CNTRL_TEST_ADDR) != 55){
-		printk(KERN_ERR LITEPCIE_NAME " Register test failed\n");
+		printk(KERN_ERR LITEPCIE_NAME " CSR register test failed\n");
 		return -EIO;
 	}
 	return 0;
@@ -572,7 +572,7 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 	litepcie_device *s = NULL;
 	uint8_t rev_id, ch_cnt;
 	int ret, index, i;
-#ifdef KERN_DEBUG
+#ifdef DEBUG_KERN
 	printk(KERN_INFO LITEPCIE_NAME " Probing device\n");
 #endif
 
@@ -648,7 +648,7 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 		printk(KERN_ERR LITEPCIE_NAME " Failed to get number of channels\n");
 		goto unmap_io;
 	}
-#ifdef KERN_DEBUG
+#ifdef DEBUG_KERN
 	printk(KERN_INFO LITEPCIE_NAME " Nchannels: %d\n",ch_cnt);
 #endif
 	/* allocate DMA buffers */
@@ -666,9 +666,10 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 
 
 	litepcie_device_table[index] = s;
-#ifdef KERN_DEBUG
+#ifdef DEBUG_KERN
 	printk(KERN_INFO LITEPCIE_NAME " Assigned to %d\n", index);
 #endif
+    printk(KERN_INFO LITEPCIE_NAME " Kernel initialized successfully\n");
 	ret = litepcie_init_chrdev(s);
 	if (ret)
 	    pci_unregister_driver(&litepcie_pci_driver);
@@ -696,7 +697,7 @@ static int __init litepcie_module_init(void)
     litepcie_class = class_create(THIS_MODULE, LITEPCIE_NAME);
     if (IS_ERR(litepcie_class))
         return PTR_ERR(litepcie_class);
-#ifdef KERN_DEBUG
+#ifdef DEBUG_KERN
 	printk(KERN_INFO LITEPCIE_NAME " Init litepcie module\n");
 #endif
     
@@ -713,7 +714,7 @@ static int __init litepcie_module_init(void)
 static void __exit litepcie_module_exit(void)
 {
     pci_unregister_driver(&litepcie_pci_driver);
-#ifdef KERN_DEBUG
+#ifdef DEBUG_KERN
 	printk(KERN_INFO LITEPCIE_NAME " litepcie_module_exit\n");
 #endif
     class_destroy(litepcie_class);
