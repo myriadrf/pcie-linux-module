@@ -32,25 +32,28 @@
 
 #define LITEPCIE_NAME "litepcie"
 #define LITEPCIE__EP_COUNT (DMA_ENDPOINT_COUNT*2+1)
-#define LITEPCIE__DEVICE_COUNT 1
+#define LITEPCIE__DEVICE_COUNT 4
 #define DMA_BUFFER_SIZE PAGE_ALIGN(65536)
 #define DMA_BUFFER_MAP_SIZE (DMA_BUFFER_SIZE * DMA_BUFFER_COUNT)
 #define MIN_TRANSFER_SIZE 4096
 
+typedef struct litepcie_device litepcie_device;
+
 typedef struct
-{
-	uint8_t* dma_buf[DMA_BUFFER_COUNT];
-	size_t dma_bufs_addr[DMA_BUFFER_COUNT];
-	uint16_t index;
-	uint16_t offset;
-	uint32_t buf_size;
-	uint8_t started;
-	uint8_t dma_ep;
-	uint8_t is_tx;
+        {
+        uint8_t* dma_buf[DMA_BUFFER_COUNT];
+        size_t dma_bufs_addr[DMA_BUFFER_COUNT];
+        uint16_t index;
+        uint16_t offset;
+        uint32_t buf_size;
+        uint8_t started;
+        uint8_t dma_ep;
+        uint8_t is_tx;
+        litepcie_device *dev;
 } litepcie_channel;
 
 
-typedef struct
+typedef struct litepcie_device
 {
 	struct pci_dev *dev;
 	uint8_t *bar0_addr; /* virtual address of BAR0 */
@@ -64,7 +67,7 @@ static litepcie_device *litepcie_device_table[LITEPCIE__DEVICE_COUNT] = {NULL};
 
 
 static void litepcie_end(struct pci_dev *dev, litepcie_device *s);
-static int litepcie_init_chrdev(litepcie_device *s);
+static int litepcie_init_chrdev(litepcie_device *s, int index);
 static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *id);
 
 static inline uint32_t litepcie_readl(litepcie_device *s, uint32_t addr)
@@ -79,22 +82,28 @@ static inline void litepcie_writel(litepcie_device *s, uint32_t addr, uint32_t v
 
 static int litepcie_open(struct inode *inode, struct file *file)
 {
-	litepcie_device *s;
-	size_t minor;
+	litepcie_device *s = NULL;
+        int i = 0;
+	int minor = iminor(inode);
+        int major = imajor(inode);
 	/* find PCI device */
-	minor = iminor(inode);
-	s = litepcie_device_table[0];
-	if (minor < 0 || minor > s->ch_cnt)
-		return -ENODEV;
+        for (i = 0; i < LITEPCIE__DEVICE_COUNT; i++) {
+                if (!litepcie_device_table[i])
+                    continue;
+                s = litepcie_device_table[i];
+                if ((major == MAJOR(s->cdev.dev))
+                    && (minor >= MINOR(s->cdev.dev))
+                    && (minor < MINOR(s->cdev.dev)+s->ch_cnt))
+                        break;
+                s = NULL;
+        }
+
 	if (!s)
 		return -ENODEV;
 #ifdef DEBUG_KERN
-	printk("open %lu\n", minor);
+	printk("open %d %d\n", major, minor);
 #endif
-	if (minor == 0)
-		file->private_data = NULL;
-	else if (minor <= s->ch_cnt*2)
-		file->private_data = &s->channels[minor-1];
+        file->private_data = &s->channels[minor-MINOR(s->cdev.dev)];
 	litepcie_writel(s, CSR_CNTRL_TEST_ADDR, 55);
 	if(litepcie_readl(s, CSR_CNTRL_TEST_ADDR) != 55){
 		printk(KERN_ERR LITEPCIE_NAME " CSR register test failed\n");
@@ -107,7 +116,7 @@ static int litepcie_dma_start(litepcie_channel* ch, int buf_size)
 {
 	int i;
 	int ep = ch->dma_ep;
-	litepcie_device *s = litepcie_device_table[0];
+	litepcie_device *s = ch->dev;
 
 	if (buf_size < MIN_TRANSFER_SIZE)
 		buf_size = MIN_TRANSFER_SIZE;
@@ -178,7 +187,7 @@ static int litepcie_dma_start(litepcie_channel* ch, int buf_size)
 
 static int litepcie_dma_stop(litepcie_channel* ch)
 {
-	litepcie_device *s = litepcie_device_table[0];
+	litepcie_device *s = ch->dev;
 	int ep = ch->dma_ep;
 	if (!ch->is_tx) {
 #ifdef DEBUG_KERN
@@ -221,7 +230,8 @@ static int litepcie_release(struct inode *inode, struct file *file)
 
 static long litepcie_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-    litepcie_device *s = litepcie_device_table[0];
+    litepcie_channel *ch = (litepcie_channel*)file->private_data;
+    litepcie_device *s = ch->dev;
     long ret;
 
     switch (cmd)
@@ -277,10 +287,8 @@ static inline int litepcie_fifo_read(litepcie_channel* fifo, char __user *buf, c
     uint8_t *rx_buf;
     int bytes_read = 0;
     int ep = fifo->dma_ep;
-    litepcie_device *s = litepcie_device_table[0];
-    const uint8_t back = litepcie_readl(s, CSR_PCIE_DMA_WRITER_CURRENT_PACKET_ADDR(ep));
-	if(back == -1)
-	{ printk(KERN_ERR LITEPCIE_NAME " WRONG REGISTER VALUE\n"); return 0;}
+    litepcie_device *s = fifo->dev;
+    const uint8_t back = litepcie_readl(s, CSR_PCIE_DMA_WRITER_TABLE_LOOP_STATUS_ADDR(ep));
     if ((back+DMA_BUFFER_COUNT-fifo->index)%DMA_BUFFER_COUNT > DMA_BUFFER_COUNT*2/3) //assume overflow
     {
         fifo->offset = 0;
@@ -311,14 +319,11 @@ static inline int litepcie_fifo_read(litepcie_channel* fifo, char __user *buf, c
 static inline int litepcie_fifo_write(litepcie_channel* fifo, const char __user *buf, int count)
 {
 	uint8_t *tx_buf;
-	litepcie_device *s = litepcie_device_table[0];
+	litepcie_device *s = fifo->dev;
 	int ep = fifo->dma_ep;
 	int n, bytes_written = 0;
 	int timeout;
 	const uint16_t front = litepcie_readl(s, CSR_PCIE_DMA_READER_CURRENT_PACKET_ADDR(ep));
-	
-	if(front == -1)
-	{ printk(KERN_ERR "WRONG REGISTER VALUE\n"); return 0;}
 	
 	while (count > bytes_written)
 	{
@@ -355,7 +360,7 @@ static inline int litepcie_fifo_write(litepcie_channel* fifo, const char __user 
 	return bytes_written;
 }
 
-static inline int litepcie_ctrl_write(const char __user *userbuf, int count)
+static inline int litepcie_ctrl_write(litepcie_channel* ch, const char __user *userbuf, int count)
 {
 	uint32_t i, value;
 	if (count >  CSR_CNTRL_CNTRL_SIZE*sizeof(uint32_t))
@@ -364,19 +369,19 @@ static inline int litepcie_ctrl_write(const char __user *userbuf, int count)
 	{
 		if (copy_from_user(&value, userbuf+i, sizeof(value)))
 		    return -EFAULT;
-		litepcie_writel(litepcie_device_table[0], CSR_CNTRL_BASE+i, value);
+		litepcie_writel(ch->dev, CSR_CNTRL_BASE+i, value);
 	}
 	return i;
 }
 
-static inline int litepcie_ctrl_read(char __user *userbuf, int count)
+static inline int litepcie_ctrl_read(litepcie_channel* ch, char __user *userbuf, int count)
 {
 	uint32_t i, value;
 	if (count > CSR_CNTRL_CNTRL_SIZE*sizeof(uint32_t))
 	count =  CSR_CNTRL_CNTRL_SIZE*sizeof(uint32_t);
 	for (i = 0; i< count; i+=sizeof(value))
 	{
-		value = litepcie_readl(litepcie_device_table[0], CSR_CNTRL_BASE+i);
+		value = litepcie_readl(ch->dev, CSR_CNTRL_BASE+i);
 		if (copy_to_user(userbuf+i, &value, sizeof(value)))
 			return -EFAULT;
 	}
@@ -387,24 +392,24 @@ static ssize_t litepcie_read(struct file *f, char __user *buf, size_t cnt, loff_
 {
 	litepcie_channel* ch = (litepcie_channel*)f->private_data;
 
-	if (ch)	{
+	if (ch->dma_buf[0]) {
 		if (!ch->started)
 			litepcie_dma_start(ch, cnt);
 		return litepcie_fifo_read(ch, buf, cnt);
 	}
-	return litepcie_ctrl_read(buf, cnt);
+	return litepcie_ctrl_read(ch, buf, cnt);
 }
 
 static ssize_t litepcie_write(struct file *f, const char __user *buf, size_t cnt, loff_t *p)
 {
 	litepcie_channel* ch = (litepcie_channel*)f->private_data;
 
-	if (ch)	{
+	if (ch->dma_buf[0]) {
 		if (!ch->started)
 			litepcie_dma_start(ch, cnt);
 		return litepcie_fifo_write(ch, buf, cnt);
 	}
-	return litepcie_ctrl_write(buf, cnt);
+	return litepcie_ctrl_write(ch, buf, cnt);
 }
 
 static const struct file_operations litepcie_fops = {
@@ -447,8 +452,12 @@ static void litepcie_pci_remove(struct pci_dev *dev)
 #ifdef DEBUG_KERN
 	printk(KERN_INFO LITEPCIE_NAME " litepcie_pci_remove\n");
 #endif
-
-    litepcie_device_table[0] = NULL;
+        for (i = 0; i < LITEPCIE__DEVICE_COUNT; i++) {
+            if (litepcie_device_table[i] == s) {
+                litepcie_device_table[i] = NULL;
+                break;
+            }
+        }
 
     litepcie_end(dev, s);
     major = MAJOR(s->cdev.dev);
@@ -462,13 +471,15 @@ static void litepcie_pci_remove(struct pci_dev *dev)
     kfree(s);
 };
 
-static int litepcie_init_chrdev(litepcie_device *s)
+static int litepcie_init_chrdev(litepcie_device *s, int index)
 {
 	int ret;
 	int ch = 0, i, minor, major;
 	char name[32];
+        char litepcie_name[16];
 	dev_t cdev;
 	struct device *dev;
+        snprintf(litepcie_name, sizeof(litepcie_name)-1, "%s%d", LITEPCIE_NAME, index);
 
 	ret = alloc_chrdev_region(&cdev, 0, 1+s->ch_cnt, LITEPCIE_NAME);
 	if (ret)
@@ -486,19 +497,19 @@ static int litepcie_init_chrdev(litepcie_device *s)
 		goto unreg;
 	}
 
-	dev= device_create(litepcie_class, NULL, MKDEV(major, minor), NULL,"%s_control", LITEPCIE_NAME);
+	dev= device_create(litepcie_class, NULL, MKDEV(major, minor), NULL,"%s_control", litepcie_name);
 	if (IS_ERR(dev)) {
 		printk(KERN_ERR LITEPCIE_NAME " Failed to create device.\n");
 		ret = -ENODEV;
 		goto destroy_ctrl;
 	}
 
-	for (i = minor+1, ch = 0; ch < s->ch_cnt; ch++, i++) {
+	for (i = minor+1, ch = 1; ch < s->ch_cnt; ch++, i++) {
 
 		if (s->channels[ch].is_tx)
-			snprintf(name, sizeof(name)-1, "%s_write%d", LITEPCIE_NAME, s->channels[ch].dma_ep);
+			snprintf(name, sizeof(name)-1, "%s_write%d", litepcie_name, s->channels[ch].dma_ep);
 		else
-			snprintf(name, sizeof(name)-1, "%s_read%d", LITEPCIE_NAME, s->channels[ch].dma_ep);
+			snprintf(name, sizeof(name)-1, "%s_read%d", litepcie_name, s->channels[ch].dma_ep);
 
 		name[sizeof(name)-1] = 0;
 		dev = device_create(litepcie_class,
@@ -519,7 +530,7 @@ static int litepcie_init_chrdev(litepcie_device *s)
 	return 0; //success
 
 destroy_channels:
-	while (ch--)
+	while (--ch)
 		device_destroy(litepcie_class, MKDEV(major, --i));
 destroy_ctrl:
 	device_destroy(litepcie_class, MKDEV(major, minor));
@@ -563,6 +574,7 @@ static int litepcie_add_channel(litepcie_device *s, uint8_t is_tx, uint8_t ep)
         }
 	s->channels[s->ch_cnt].dma_ep = ep;
 	s->channels[s->ch_cnt].is_tx = is_tx;
+        s->channels[s->ch_cnt].dev = s;
 	s->ch_cnt++;
 	return 0;
 }
@@ -652,11 +664,11 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 	printk(KERN_INFO LITEPCIE_NAME " Nchannels: %d\n",ch_cnt);
 #endif
 	/* allocate DMA buffers */
-	s->channels = kzalloc(sizeof(litepcie_channel)*ch_cnt*2,
-			      DMA_BUFFER_SIZE);
+	s->channels = kzalloc(sizeof(litepcie_channel)*(1+ch_cnt*2), GFP_KERNEL);
 	if (!s->channels)
 		goto unmap_io;
-
+        s->channels[0].dev = s;
+        s->ch_cnt++;
 	for (i = 0; i < ch_cnt; i++)
 		if (litepcie_add_channel(s, 1, i))
 			goto destory_channel_buffers;
@@ -664,13 +676,11 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 		if (litepcie_add_channel(s, 0, i))
 			goto destory_channel_buffers;
 
-
 	litepcie_device_table[index] = s;
 #ifdef DEBUG_KERN
 	printk(KERN_INFO LITEPCIE_NAME " Assigned to %d\n", index);
 #endif
-    printk(KERN_INFO LITEPCIE_NAME " Kernel initialized successfully\n");
-	ret = litepcie_init_chrdev(s);
+	ret = litepcie_init_chrdev(s, index);
 	if (ret)
 	    pci_unregister_driver(&litepcie_pci_driver);
 	else
