@@ -40,7 +40,7 @@
 typedef struct litepcie_device litepcie_device;
 
 typedef struct
-        {
+{
         uint8_t* dma_buf[DMA_BUFFER_COUNT];
         size_t dma_bufs_addr[DMA_BUFFER_COUNT];
         uint16_t index;
@@ -297,7 +297,7 @@ static inline int litepcie_fifo_read(litepcie_channel* fifo, char __user *buf, c
 
     while (count > bytes_read)
     {
-        if (fifo->index == back)
+        if (fifo->index == (uint8_t)(back-1) || fifo->index == back)
             return bytes_read;
 
         rx_buf = fifo->dma_buf[fifo->index]+fifo->offset;
