@@ -1,0 +1,12 @@
+[Unit]
+Description=Litepcie automatic kernel module install and load
+Before=network.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+Group=root
+ExecStart=/usr/src/litepcie/install_litepcie.sh
+
+[Install]
+WantedBy=multi-user.target
