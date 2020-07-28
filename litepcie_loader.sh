@@ -11,7 +11,7 @@ if ! lsmod | grep -Eq "^litepcie" ; then
         echo "litepcie module not loaded" >> /var/tmp/litepcie.log
         #echo $MODULE_LOC
         make -C $SOURCE_LOC/ clean
-        make -C $SOURCE_LOC/
+        make -C $SOURCE_LOC/ || exit 1
         mkdir -p $MODULE_LOC
         cp $SOURCE_LOC/litepcie.ko $MODULE_LOC/
         depmod

@@ -16,7 +16,7 @@ if lsmod | grep -Eq "^litepcie"; then
 	rmmod litepcie
 fi
 
-sh $SOURCE_LOC/install_litepcie.sh
+sh $SOURCE_LOC/litepcie_loader.sh
 
 cp litepcie.service /etc/systemd/system/
 systemctl enable litepcie.service
