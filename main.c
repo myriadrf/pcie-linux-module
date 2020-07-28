@@ -2,6 +2,7 @@
  * LitePCIe driver
  */
 #include <linux/kernel.h>
+#include <linux/version.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/ioctl.h>
@@ -16,11 +17,13 @@
 #include <linux/math64.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
+#include <linux/cdev.h>
 #include <linux/pci.h>
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 4, 0)
 #include <linux/pci-aspm.h>
+#endif
 #include <linux/pci_regs.h>
 #include <linux/delay.h>
-#include <linux/version.h>
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
 #include <linux/sched/signal.h>
 #endif
