@@ -479,10 +479,15 @@ static int litepcie_init_chrdev(litepcie_device *s, int index)
 	int ret;
 	int ch = 0, i, minor, major;
 	char name[32];
-        char litepcie_name[16];
+    char litepcie_name[32];
 	dev_t cdev;
 	struct device *dev;
-        snprintf(litepcie_name, sizeof(litepcie_name)-1, "%s%d", LITEPCIE_NAME, index);
+	if(s->dev->vendor == XILINX_FPGA_VENDOR_ID)
+		snprintf(litepcie_name, sizeof(litepcie_name)-1, "%s%d", "Lime5GRadio", index);
+	else if(s->dev->vendor == ALTERA_FPGA_VENDOR_ID && s->ch_cnt == 7)
+		snprintf(litepcie_name, sizeof(litepcie_name)-1, "%s%d", "LimeQPCIe", index);
+	else if(s->dev->vendor == ALTERA_FPGA_VENDOR_ID && s->ch_cnt == 3)
+		snprintf(litepcie_name, sizeof(litepcie_name)-1, "%s%d", "LimePCIe", index);	
 
 	ret = alloc_chrdev_region(&cdev, 0, 1+s->ch_cnt, LITEPCIE_NAME);
 	if (ret)
@@ -545,7 +550,8 @@ unreg:
 
 static const struct pci_device_id litepcie_pci_ids[] = {
     {
-        PCI_DEVICE(PCI_FPGA_VENDOR_ID, PCI_FPGA_DEVICE_ID),
+        PCI_DEVICE(ALTERA_FPGA_VENDOR_ID, ALTERA_FPGA_DEVICE_ID),
+		PCI_DEVICE(XILINX_FPGA_VENDOR_ID, XILINX_FPGA_DEVICE_ID),
     },
     {
         0,
