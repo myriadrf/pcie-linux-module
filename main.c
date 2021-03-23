@@ -549,13 +549,10 @@ unreg:
 }
 
 static const struct pci_device_id litepcie_pci_ids[] = {
-    {
-        PCI_DEVICE(ALTERA_FPGA_VENDOR_ID, ALTERA_FPGA_DEVICE_ID),
-		PCI_DEVICE(XILINX_FPGA_VENDOR_ID, XILINX_FPGA_DEVICE_ID),
-    },
-    {
-        0,
-    }};
+	{PCI_DEVICE(XILINX_FPGA_VENDOR_ID, XILINX_FPGA_DEVICE_ID)},
+    {PCI_DEVICE(ALTERA_FPGA_VENDOR_ID, ALTERA_FPGA_DEVICE_ID)},
+    {}
+};
 MODULE_DEVICE_TABLE(pci, litepcie_pci_ids);
 
 static struct pci_driver litepcie_pci_driver = {
