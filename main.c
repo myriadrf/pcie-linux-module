@@ -49,7 +49,7 @@
 
 //#define DEBUG_CSR
 //#define DEBUG_MSI
-//#define DEBUG_POLL
+#define DEBUG_POLL
 //#define DEBUG_READ
 //#define DEBUG_WRITE
 
@@ -110,6 +110,8 @@ struct litepcie_chan_priv {
 	bool reader;
 	bool writer;
 };
+
+static uint8_t checkBuf[DMA_BUFFER_SIZE];
 
 static int litepcie_major;
 static int litepcie_minor_idx;
@@ -389,6 +391,8 @@ static int litepcie_open(struct inode *inode, struct file *file)
 	struct litepcie_chan *chan = container_of(inode->i_cdev, struct litepcie_chan, cdev);
 	struct litepcie_chan_priv *chan_priv = kzalloc(sizeof(*chan_priv), GFP_KERNEL);
 
+	pr_info("Open %s\n", file->f_path.dentry->d_iname);
+
 	if (!chan_priv)
 		return -ENOMEM;
 
@@ -414,6 +418,8 @@ static int litepcie_release(struct inode *inode, struct file *file)
 {
 	struct litepcie_chan_priv *chan_priv = file->private_data;
 	struct litepcie_chan *chan = chan_priv->chan;
+
+	pr_info("Release %s\n", file->f_path.dentry->d_iname);
 
 	if (chan_priv->reader) {
 		/* disable interrupt */
@@ -464,14 +470,30 @@ static ssize_t litepcie_read(struct file *file, char __user *data, size_t size, 
 	i = 0;
 	overflows = 0;
 	len = size;
+
+	int64_t hw;
+	int64_t sw;
 	while (len >= DMA_BUFFER_SIZE) {
 		if ((chan->dma.writer_hw_count - chan->dma.writer_sw_count) > 0) {
-			if ((chan->dma.writer_hw_count - chan->dma.writer_sw_count) > DMA_BUFFER_COUNT/2) {
+			hw = chan->dma.writer_hw_count;
+			sw = chan->dma.writer_sw_count;
+
+			if ((hw - sw) > DMA_BUFFER_COUNT/2) {
+				pr_info("overflow: hw: %li, sw: %li, diff: %li\n", hw, sw, hw-sw);
 				overflows++;
-			} else {
+			} else
+			{
+				// ret = copy_to_user(data + (chan->block_size * i),
+				// 		   checkBuf,
+				// 		   DMA_BUFFER_SIZE);
 				ret = copy_to_user(data + (chan->block_size * i),
 						   chan->dma.writer_addr[chan->dma.writer_sw_count%DMA_BUFFER_COUNT],
 						   DMA_BUFFER_SIZE);
+				uint8_t src = overflows;
+				copy_to_user(data + (chan->block_size * i) + 7,
+						   &src,
+						   1);
+				
 				if (ret)
 					return -EFAULT;
 			}
@@ -484,10 +506,10 @@ static ssize_t litepcie_read(struct file *file, char __user *data, size_t size, 
 	}
 
 	if (overflows)
-		dev_err(&s->dev->dev, "Reading too late, %d buffers lost\n", overflows);
+		dev_err(&s->dev->dev, "Reading too late, %d buffers lost, ret: %d\n", overflows, size - len);
 
 #ifdef DEBUG_READ
-	dev_dbg(&s->dev->dev, "read: read %ld bytes out of %ld\n", size - len, size);
+	dev_dbg(&s->dev->dev, "read: read %ld bytes out of %ld, hw: %i sw: %i\n", size - len, size, hw, sw);
 #endif
 
 	return size - len;
@@ -726,8 +748,7 @@ static long litepcie_ioctl(struct file *file, unsigned int cmd,
 			ret = -EFAULT;
 			break;
 		}
-
-		pr_info("DMA writer %i\n", m.enable);
+		//pr_info("%s DMA writer %i\n", file->f_path.dentry->d_iname, m.enable);
 
 		if (m.enable != chan->dma.writer_enable) {
 			/* enable / disable DMA */
@@ -762,7 +783,7 @@ static long litepcie_ioctl(struct file *file, unsigned int cmd,
 			break;
 		}
 
-		pr_info("DMA writer %i\n", m.enable);
+		//pr_info("%s DMA reader %i\n", file->f_path.dentry->d_iname, m.enable);
 
 		if (m.enable != chan->dma.reader_enable) {
 			/* enable / disable DMA */
@@ -940,7 +961,7 @@ static const struct file_operations litepcie_fops = {
 	.read = litepcie_read,
 	.poll = litepcie_poll,
 	.write = litepcie_write,
-	//.mmap = litepcie_mmap, // don't need or support this
+	.mmap = litepcie_mmap,
 };
 
 static const struct file_operations litepcie_fops_control = {
@@ -1352,7 +1373,7 @@ static int __init litepcie_module_init(void)
 		pr_err(" Error while registering PCI driver\n");
 		goto fail_register;
 	}
-
+	memset(checkBuf, -2, DMA_BUFFER_SIZE);
 	return 0;
 
 fail_register:
