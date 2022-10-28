@@ -68,8 +68,23 @@ struct litepcie_ioctl_mmap_dma_info {
 	uint64_t dma_rx_buf_count;
 };
 
+struct litepcie_ioctl_stats {
+	uint64_t totalDMAbuffersOut;
+	uint64_t totalDMAbuffersIn;
+	uint64_t totalBytesOut;
+	uint64_t totalBytesIn;
+	uint64_t dma_tx_buf_size;
+	uint64_t dma_tx_buf_count;
+
+	uint64_t dma_rx_buf_offset;
+	uint64_t dma_rx_buf_size;
+	uint64_t dma_rx_buf_count;
+};
+
 struct litepcie_ioctl_mmap_dma_update {
 	int64_t sw_count;
+	int32_t buffer_size;
+	bool genIRQ;
 };
 
 #define LITEPCIE_IOCTL 'S'
