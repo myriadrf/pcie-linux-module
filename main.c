@@ -271,7 +271,7 @@ static void litepcie_dma_writer_start(struct litepcie_device *s, int chan_num, u
 		litepcie_writel(s, dmachan->base + PCIE_DMA_WRITER_TABLE_VALUE_OFFSET + 4, (dmachan->writer_handle[i] >>  0) & 0xffffffff);
 		/* Write descriptor (and fill 32-bit Address MSB for 64-bit mode). */
 		litepcie_writel(s, dmachan->base + PCIE_DMA_WRITER_TABLE_WE_OFFSET,        (dmachan->writer_handle[i] >> 32) & 0xffffffff);
-		dev_info(&s->dev->dev, "DMA writer table[%i], buffer size: %u, generateIRQ: %i, addr:0x%x", i, write_size, disableIRQ ? 0 : 1, dmachan->writer_handle[i]);
+		//dev_info(&s->dev->dev, "DMA writer table[%i], buffer size: %u, generateIRQ: %i, addr:0x%x", i, write_size, disableIRQ ? 0 : 1, dmachan->writer_handle[i]);
 	}
 	litepcie_writel(s, dmachan->base + PCIE_DMA_WRITER_TABLE_LOOP_PROG_N_OFFSET, 1);
 	
@@ -608,20 +608,13 @@ static ssize_t submiteWrite(struct file *file, size_t bufSize, bool genIRQ)
 	struct litepcie_chan *chan = chan_priv->chan;
 	struct litepcie_device *s = chan->litepcie_dev;
 
-	// uint32_t loop_status = litepcie_readl(s, chan->dma.base + PCIE_DMA_READER_TABLE_LOOP_STATUS_OFFSET);
-	// int32_t tableCounter = (loop_status >> 16);
-	// int32_t tableIndex = loop_status & 0xFFFF;
-	chan->dma.reader_table_level = litepcie_readl(s, chan->dma.base + PCIE_DMA_READER_TABLE_LEVEL_OFFSET);
 	chan->dma.reader_hw_count = litepcie_readl(s, chan->dma.base + PCIE_DMA_READER_TABLE_DMADESCRIPTORCNT_OFFSET);
-	int32_t tableLevel = chan->dma.reader_table_level;
 
-	const int tableUpperLimit = DMA_BUFFER_COUNT-16;// - 2*DMA_BUFFER_PER_IRQ;
-
-	//const bool hasTableSpace = tableLevel < tableUpperLimit;
-	const bool hasTableSpace = chan->dma.reader_sw_count-chan->dma.reader_hw_count < tableUpperLimit;
+	const int maxDMApending = DMA_BUFFER_COUNT-16;// - 2*DMA_BUFFER_PER_IRQ;
+	const bool canSubmit = chan->dma.reader_sw_count-chan->dma.reader_hw_count < maxDMApending;
 
 	if (file->f_flags & O_NONBLOCK) {
-		if (!hasTableSpace)
+		if (!canSubmit)
 		{
 #ifdef DEBUG_WRITE
 			//dev_dbg(&s->dev->dev, "submitWrite: failed, table level (%i/%i)", tableLevel, tableUpperLimit);
@@ -632,8 +625,8 @@ static ssize_t submiteWrite(struct file *file, size_t bufSize, bool genIRQ)
 			ret = 0;
 	} 
 	else {
-		if (!hasTableSpace)
-			ret = -EAGAIN;//wait_event_interruptible(chan->wait_wr, chan->dma.reader_table_level < tableUpperLimit && chan->dma.reader_sw_count - chan->dma.reader_hw_count < tableUpperLimit);
+		if (!canSubmit)
+			ret = wait_event_interruptible(chan->wait_wr, chan->dma.reader_sw_count-chan->dma.reader_hw_count < maxDMApending);
 		else
 			ret = 0;
 	}
@@ -821,7 +814,7 @@ static unsigned int litepcie_poll(struct file *file, poll_table *wait)
 	if ((chan->dma.writer_hw_count - chan->dma.writer_sw_count) > 2)
 		mask |= POLLIN | POLLRDNORM;
 
-	if ((chan->dma.reader_sw_count - chan->dma.reader_hw_count) < DMA_BUFFER_COUNT-1)
+	if ((chan->dma.reader_sw_count - chan->dma.reader_hw_count) < DMA_BUFFER_COUNT-16)
 		mask |= POLLOUT | POLLWRNORM;
 
 	return mask;
