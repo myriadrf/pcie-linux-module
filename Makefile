@@ -7,8 +7,9 @@ obj-m = litepcie.o liteuart.o
 litepcie-objs = main.o
 #liteuart-objs = liteuart.o
 
-
 all: litepcie.ko liteuart.ko
+
+export EXTRA_CFLAGS := -std=gnu99 -Wno-declaration-after-statement
 
 litepcie.ko: main.c
 	make -C $(KERNEL_PATH) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) M=$(shell pwd) modules
