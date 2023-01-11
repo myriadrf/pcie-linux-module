@@ -287,7 +287,7 @@ static void litepcie_dma_writer_stop(struct litepcie_device *s, int chan_num)
 	dmachan = &s->chan[chan_num].dma;
 
 	/* Flush and stop DMA Writer. */
-	const int transfersDone = litepcie_readl(s, dmachan->base + PCIE_DMA_WRITER_TABLE_DMADESCRIPTORCNT_OFFSET);
+	const int transfersDone = litepcie_readl(s, dmachan->base + PCIE_DMA_WRITER_TABLE_LOOP_STATUS_OFFSET);
 	litepcie_writel(s, dmachan->base + PCIE_DMA_WRITER_TABLE_LOOP_PROG_N_OFFSET, 0);
 	litepcie_writel(s, dmachan->base + PCIE_DMA_WRITER_TABLE_FLUSH_OFFSET, 1);
 	udelay(1000);
@@ -350,7 +350,7 @@ static void litepcie_dma_reader_stop(struct litepcie_device *s, int chan_num)
 	int loop = (loop_status >> 16);
 	int loopIndex = loop_status & 0xFFFF;
 	/* flush and stop dma reader */
-	const int transfersDone = litepcie_readl(s, dmachan->base + PCIE_DMA_READER_TABLE_DMADESCRIPTORCNT_OFFSET);
+	const int transfersDone = litepcie_readl(s, dmachan->base + PCIE_DMA_READER_TABLE_LOOP_STATUS_OFFSET);
 	litepcie_writel(s, dmachan->base + PCIE_DMA_READER_TABLE_LOOP_PROG_N_OFFSET, 0);
 	litepcie_writel(s, dmachan->base + PCIE_DMA_READER_TABLE_FLUSH_OFFSET, 1);
 	udelay(1000);
@@ -416,7 +416,7 @@ static irqreturn_t litepcie_interrupt(int irq, void *data)
 		/* dma reader interrupt handling */
 		if (irq_vector & (1 << chan->dma.reader_interrupt)) {
 			chan->dma.reader_table_level = litepcie_readl(s, chan->dma.base + PCIE_DMA_READER_TABLE_LEVEL_OFFSET);
-			uint32_t readTransfers = litepcie_readl(s, chan->dma.base + PCIE_DMA_READER_TABLE_DMADESCRIPTORCNT_OFFSET);
+			uint32_t readTransfers = litepcie_readl(s, chan->dma.base + PCIE_DMA_READER_TABLE_LOOP_STATUS_OFFSET);
 			chan->dma.reader_hw_count = readTransfers;
 			++chan->dma.reader_interruptCounter;
 #ifdef DEBUG_MSI
@@ -431,7 +431,7 @@ static irqreturn_t litepcie_interrupt(int irq, void *data)
 		/* dma writer interrupt handling */
 		if (irq_vector & (1 << chan->dma.writer_interrupt) || forceWake)
 		{
-			uint32_t writeTransfers = litepcie_readl(s, chan->dma.base + PCIE_DMA_WRITER_TABLE_DMADESCRIPTORCNT_OFFSET);
+			uint32_t writeTransfers = litepcie_readl(s, chan->dma.base + PCIE_DMA_WRITER_TABLE_LOOP_STATUS_OFFSET);
 			chan->dma.writer_hw_count = writeTransfers;
 			if(chan->dma.writer_hw_count - chan->dma.writer_sw_count > 0 || forceWake)
 			{
@@ -607,7 +607,7 @@ static ssize_t submiteWrite(struct file *file, size_t bufSize, bool genIRQ)
 	struct litepcie_chan *chan = chan_priv->chan;
 	struct litepcie_device *s = chan->litepcie_dev;
 
-	chan->dma.reader_hw_count = litepcie_readl(s, chan->dma.base + PCIE_DMA_READER_TABLE_DMADESCRIPTORCNT_OFFSET);
+	chan->dma.reader_hw_count = litepcie_readl(s, chan->dma.base + PCIE_DMA_READER_TABLE_LOOP_STATUS_OFFSET);
 
 	const int maxDMApending = DMA_BUFFER_COUNT-16;// - 2*DMA_BUFFER_PER_IRQ;
 	const bool canSubmit = chan->dma.reader_sw_count-chan->dma.reader_hw_count < maxDMApending;
@@ -974,7 +974,7 @@ static long litepcie_ioctl(struct file *file, unsigned int cmd,
 
 		chan->dma.reader_enable = m.enable;
 
-		uint32_t readTransfers = litepcie_readl(dev, chan->dma.base + PCIE_DMA_READER_TABLE_DMADESCRIPTORCNT_OFFSET);
+		uint32_t readTransfers = litepcie_readl(dev, chan->dma.base + PCIE_DMA_READER_TABLE_LOOP_STATUS_OFFSET);
 		m.hw_count = readTransfers;//chan->dma.reader_hw_count;
 		m.sw_count = chan->dma.reader_sw_count;
 		m.interruptCounter = chan->dma.reader_interruptCounter;
