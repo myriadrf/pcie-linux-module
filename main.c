@@ -400,16 +400,16 @@ static irqreturn_t litepcie_interrupt(int irq, void *data)
 #endif
 
 #ifdef DEBUG_MSI
-	dev_dbg(&s->dev->dev, "MSI: 0x%x 0x%x\n", irq_vector, irq_enable);
+	//dev_dbg(&s->dev->dev, "MSI: 0x%x 0x%x\n", irq_vector, irq_enable);
 #endif
 	irq_vector &= irq_enable;
 	clear_mask = 0;
 
 	const bool forceWake = irq_vector == 0;
+#ifdef DEBUG_MSI
 	if (irq_vector == 0)
-	{
 		dev_dbg(&s->dev->dev, "IRQ 0, should not happen\n");
-	}
+#endif
 
 	for (i = 0; i < s->channels; i++) {
 		chan = &s->chan[i];
@@ -420,7 +420,7 @@ static irqreturn_t litepcie_interrupt(int irq, void *data)
 			chan->dma.reader_hw_count = readTransfers;
 			++chan->dma.reader_interruptCounter;
 #ifdef DEBUG_MSI
-			dev_dbg(&s->dev->dev, "MSI DMA%d Reader, tblLvl:%i sw:%lli hw:%lli, irqCnt:%u, dmaCnt:%u\n", i, chan->dma.reader_table_level,
+			dev_dbg(&s->dev->dev, "MSI DMA%d Reader, tblLvl:%i sw:%lli hw:%lli, irqCnt:%u, dmaCnt:%08X\n", i, chan->dma.reader_table_level,
 				chan->dma.reader_sw_count, chan->dma.reader_hw_count, chan->dma.reader_interruptCounter, readTransfers);
 #endif
 			if(chan->dma.reader_sw_count - chan->dma.reader_hw_count < DMA_BUFFER_COUNT-2)
@@ -432,11 +432,12 @@ static irqreturn_t litepcie_interrupt(int irq, void *data)
 		if (irq_vector & (1 << chan->dma.writer_interrupt) || forceWake)
 		{
 			uint32_t writeTransfers = litepcie_readl(s, chan->dma.base + PCIE_DMA_WRITER_TABLE_LOOP_STATUS_OFFSET);
-			chan->dma.writer_hw_count = writeTransfers;
+			//chan->dma.writer_hw_count = writeTransfers;
+			chan->dma.writer_hw_count = (writeTransfers >> 8) | (writeTransfers & 0xFF);
 			if(chan->dma.writer_hw_count - chan->dma.writer_sw_count > 0 || forceWake)
 			{
 #ifdef DEBUG_MSI
-			dev_dbg(&s->dev->dev, "MSI DMA%d Writer sw:%lli hw:%lli, dmaCnt:%u\n",
+			dev_dbg(&s->dev->dev, "MSI DMA%d Writer sw:%lli hw:%lli, dmaCnt:%08X\n",
 			 i, chan->dma.writer_sw_count, chan->dma.writer_hw_count, writeTransfers);
 #endif
 				wake_up_interruptible(&chan->wait_rd);
