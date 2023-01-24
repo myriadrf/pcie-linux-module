@@ -44,6 +44,7 @@
 #define XILINX_FPGA_DEVICE_ID 0x7022
 #define ALTERA_FPGA_VENDOR_ID 0x1172
 #define ALTERA_FPGA_DEVICE_ID 0xe001
+#define XTRX_FPGA_DEVICE_ID   0x7023
 
 #define EXPECTED_PCI_REVISION_ID 1
 
@@ -58,14 +59,19 @@
 #define LITEPCIE_NAME "litepcie"
 #define LITEPCIE_MINOR_COUNT 32
 
+#define MAX_DMA_BUFFER_COUNT 256
+#define MAX_DMA_CHANNEL_COUNT 16
+
 struct litepcie_dma_chan {
 	uint32_t base;
 	uint32_t writer_interrupt;
 	uint32_t reader_interrupt;
-	dma_addr_t reader_handle[DMA_BUFFER_COUNT];
-	dma_addr_t writer_handle[DMA_BUFFER_COUNT];
-	uint32_t *reader_addr[DMA_BUFFER_COUNT];
-	uint32_t *writer_addr[DMA_BUFFER_COUNT];
+	uint32_t bufferCount;
+	uint32_t bufferSize;
+	dma_addr_t reader_handle[MAX_DMA_BUFFER_COUNT];
+	dma_addr_t writer_handle[MAX_DMA_BUFFER_COUNT];
+	uint32_t *reader_addr[MAX_DMA_BUFFER_COUNT];
+	uint32_t *writer_addr[MAX_DMA_BUFFER_COUNT];
 	int64_t reader_hw_count;
 	int64_t reader_hw_count_last;
 	int64_t reader_sw_count;
@@ -100,7 +106,7 @@ struct litepcie_device {
 	resource_size_t bar0_size;
 	phys_addr_t bar0_phys_addr;
 	uint8_t *bar0_addr; /* virtual address of BAR0 */
-	struct litepcie_chan chan[DMA_CHANNEL_COUNT];
+	struct litepcie_chan chan[MAX_DMA_CHANNEL_COUNT];
 	spinlock_t lock;
 	int minor_base;
 	int irqs;
@@ -170,17 +176,17 @@ static int litepcie_dma_init(struct litepcie_device *s)
 	for (i = 0; i < s->channels; i++) {
 		dmachan = &s->chan[i].dma;
 		/* for each dma buffer */
-		for (j = 0; j < DMA_BUFFER_COUNT; j++) {
+		for (j = 0; j < dmachan->bufferCount; j++) {
 			/* allocate rd */
 			dmachan->reader_addr[j] = dmam_alloc_coherent(
 				&s->dev->dev,
-				DMA_BUFFER_SIZE,
+				dmachan->bufferSize,
 				&dmachan->reader_handle[j],
 				GFP_KERNEL);
 			/* allocate wr */
 			dmachan->writer_addr[j] = dmam_alloc_coherent(
 				&s->dev->dev,
-				DMA_BUFFER_SIZE,
+				dmachan->bufferSize,
 				&dmachan->writer_handle[j],
 				GFP_KERNEL);
 			/* check */
@@ -197,7 +203,7 @@ static int litepcie_dma_init(struct litepcie_device *s)
 
 static int litepcie_dma_writer_request(struct litepcie_device *s, struct litepcie_dma_chan *dmachan, dma_addr_t dmaBufAddr, uint16_t size, bool genIRQ)
 {
-	if(size == 0 || size > DMA_BUFFER_SIZE)
+	if(size == 0 || size > dmachan->bufferSize)
 	{
 		dev_err(&s->dev->dev, "DMA writer request: invalid size %i\n", size);
 		return -EINVAL;
@@ -221,7 +227,7 @@ static int litepcie_dma_writer_request(struct litepcie_device *s, struct litepci
 
 static int litepcie_dma_reader_request(struct litepcie_device *s, struct litepcie_dma_chan *dmachan, dma_addr_t dmaBufAddr, uint16_t size, bool genIRQ)
 {
-	if(size == 0 || size > DMA_BUFFER_SIZE)
+	if(size == 0 || size > dmachan->bufferSize)
 	{
 		dev_err(&s->dev->dev, "DMA reader request: invalid size %i\n", size);
 		return -EINVAL;
@@ -248,19 +254,18 @@ static void litepcie_dma_writer_start(struct litepcie_device *s, int chan_num, u
 	struct litepcie_dma_chan *dmachan;
 	int i;
 
-	if(write_size == 0 || write_size > DMA_BUFFER_SIZE)
+	dmachan = &s->chan[chan_num].dma;
+	if(write_size == 0 || write_size > dmachan->bufferSize)
 	{
 		dev_err(&s->dev->dev, "DMA writer start: invalid write size %i\n", write_size);
 		return;
 	}
 
-	dmachan = &s->chan[chan_num].dma;
-
 	/* Fill DMA Writer descriptors. */
 	litepcie_writel(s, dmachan->base + PCIE_DMA_WRITER_ENABLE_OFFSET, 0);
 	litepcie_writel(s, dmachan->base + PCIE_DMA_WRITER_TABLE_FLUSH_OFFSET, 1);
 	litepcie_writel(s, dmachan->base + PCIE_DMA_WRITER_TABLE_LOOP_PROG_N_OFFSET, 0);
-	for (i = 0; i < DMA_BUFFER_COUNT; i++) {
+	for (i = 0; i < dmachan->bufferCount; i++) {
 		const bool genIRQ = (i%irqFreq == 0);
 		if (litepcie_dma_writer_request(s, dmachan, dmachan->writer_handle[i], write_size, genIRQ) != 0)
 		{
@@ -312,20 +317,6 @@ static void litepcie_dma_reader_start(struct litepcie_device *s, int chan_num)
 	litepcie_writel(s, dmachan->base + PCIE_DMA_READER_ENABLE_OFFSET, 0);
 	litepcie_writel(s, dmachan->base + PCIE_DMA_READER_TABLE_FLUSH_OFFSET, 1);
 	litepcie_writel(s, dmachan->base + PCIE_DMA_READER_TABLE_LOOP_PROG_N_OFFSET, 0);
-// 	for (i = 0; i < DMA_BUFFER_COUNT; i++) {
-// 		/* Fill buffer size + parameters. */
-// 		litepcie_writel(s, dmachan->base + PCIE_DMA_READER_TABLE_VALUE_OFFSET,
-// #ifndef DMA_BUFFER_ALIGNED
-// 			DMA_LAST_DISABLE |
-// #endif
-// 			(!(i%DMA_BUFFER_PER_IRQ == 0)) * DMA_IRQ_DISABLE | /* generate an msi */
-// 			DMA_BUFFER_SIZE);                                 //  every n buffers 
-// 		/* Fill 32-bit Address LSB. */
-// 		litepcie_writel(s, dmachan->base + PCIE_DMA_READER_TABLE_VALUE_OFFSET + 4, (dmachan->reader_handle[i] >>  0) & 0xffffffff);
-// 		/* Write descriptor (and fill 32-bit Address MSB for 64-bit mode). */
-// 		litepcie_writel(s, dmachan->base + PCIE_DMA_READER_TABLE_WE_OFFSET, (dmachan->reader_handle[i] >> 32) & 0xffffffff);
-// 	}
-// 	litepcie_writel(s, dmachan->base + PCIE_DMA_READER_TABLE_LOOP_PROG_N_OFFSET, 1);
 
 	/* clear counters */
 	dmachan->reader_hw_count = 0;
@@ -423,7 +414,7 @@ static irqreturn_t litepcie_interrupt(int irq, void *data)
 			dev_dbg(&s->dev->dev, "MSI DMA%d Reader, tblLvl:%i sw:%lli hw:%lli, irqCnt:%u, dmaCnt:%08X\n", i, chan->dma.reader_table_level,
 				chan->dma.reader_sw_count, chan->dma.reader_hw_count, chan->dma.reader_interruptCounter, readTransfers);
 #endif
-			if(chan->dma.reader_sw_count - chan->dma.reader_hw_count < DMA_BUFFER_COUNT-2)
+			if(chan->dma.reader_sw_count - chan->dma.reader_hw_count < chan->dma.bufferCount-2)
 				wake_up_interruptible(&chan->wait_wr);
 			if(!forceWake)
 				clear_mask |= (1 << chan->dma.reader_interrupt);
@@ -523,7 +514,7 @@ static ssize_t litepcie_read(struct file *file, char __user *data, size_t size, 
 	struct litepcie_device *s = chan->litepcie_dev;
 	struct litepcie_dma_chan *dmachan = &chan->dma;
 	int bufCount = 0;
-	const int maxTransferSize = DMA_BUFFER_SIZE;
+	const int maxTransferSize = dmachan->bufferSize;
 
 #ifdef DEBUG_READ
 	dev_dbg(&s->dev->dev, "read(%ld)\n", size);
@@ -532,9 +523,10 @@ static ssize_t litepcie_read(struct file *file, char __user *data, size_t size, 
 	// If DMA is not yet active, fill table with requests and start transfers
 	if (!dmachan->writer_enable)
 	{
-		if (size > DMA_BUFFER_TOTAL_SIZE)
+		const int totalBufferSize = dmachan->bufferCount * dmachan->bufferSize;
+		if (size > totalBufferSize)
 		{
-			dev_err(&s->dev->dev, "Read too large (%ld), max DMA buffer size (%i)\n", size, DMA_BUFFER_TOTAL_SIZE);
+			dev_err(&s->dev->dev, "Read too large (%ld), max DMA buffer size (%i)\n", size, totalBufferSize);
 			return -EINVAL;
 		}
 
@@ -610,7 +602,7 @@ static ssize_t submiteWrite(struct file *file, size_t bufSize, bool genIRQ)
 
 	chan->dma.reader_hw_count = litepcie_readl(s, chan->dma.base + PCIE_DMA_READER_TABLE_LOOP_STATUS_OFFSET);
 
-	const int maxDMApending = DMA_BUFFER_COUNT-16;// - 2*DMA_BUFFER_PER_IRQ;
+	const int maxDMApending = chan->dma.bufferCount - 16; // - 2*DMA_BUFFER_PER_IRQ;
 	const bool canSubmit = chan->dma.reader_sw_count-chan->dma.reader_hw_count < maxDMApending;
 
 	if (file->f_flags & O_NONBLOCK) {
@@ -634,14 +626,14 @@ static ssize_t submiteWrite(struct file *file, size_t bufSize, bool genIRQ)
 	if (ret < 0)
 		return ret;
 
-	if(bufSize > DMA_BUFFER_SIZE || bufSize <= 0)
+	if(bufSize > chan->dma.bufferSize || bufSize <= 0)
 	{
-		dev_dbg(&s->dev->dev, "DMA writer invalid bufSize(%li) DMA_BUFFER_SIZE(%i)", bufSize, DMA_BUFFER_SIZE);
+		dev_dbg(&s->dev->dev, "DMA writer invalid bufSize(%li) DMA_BUFFER_SIZE(%i)", bufSize, chan->dma.bufferSize);
 		return -EINVAL;
 	}
 
 	//printDMAtable(chan, true);
-	const int bufIndex = chan->dma.reader_sw_count % DMA_BUFFER_COUNT;
+	const int bufIndex = chan->dma.reader_sw_count % chan->dma.bufferCount;
 
 	struct litepcie_dma_chan *dmachan = &chan->dma;
 	/* Fill buffer size + parameters. */
@@ -670,16 +662,17 @@ static ssize_t litepcie_write(struct file *file, const char __user *data, size_t
 	struct litepcie_chan *chan = chan_priv->chan;
 	struct litepcie_device *s = chan->litepcie_dev;
 	struct litepcie_dma_chan *dmachan = &chan->dma;
-	const int maxTransferSize = DMA_BUFFER_SIZE;
+	const int maxTransferSize = dmachan->bufferSize;
 #ifdef DEBUG_WRITE
 	dev_dbg(&s->dev->dev, "write(%ld)\n", size);
 #endif
 
 	if (!dmachan->reader_enable)
 	{
-		if (size > DMA_BUFFER_TOTAL_SIZE)
+		const int totalBufferSize = dmachan->bufferCount * dmachan->bufferSize;
+		if (size > totalBufferSize)
 		{
-			dev_err(&s->dev->dev, "Write too large (%ld), max DMA buffer size (%i)\n", size, DMA_BUFFER_TOTAL_SIZE);
+			dev_err(&s->dev->dev, "Write too large (%ld), max DMA buffer size (%i)\n", size, totalBufferSize);
 			return -EINVAL;
 		}
 
@@ -741,15 +734,16 @@ static int litepcie_mmap(struct file *file, struct vm_area_struct *vma)
 	unsigned long pfn;
 	int is_tx, i;
 
-	if (vma->vm_end - vma->vm_start != DMA_BUFFER_TOTAL_SIZE)
+	const int totalBufferSize = chan->dma.bufferCount * chan->dma.bufferSize;
+	if (vma->vm_end - vma->vm_start != totalBufferSize)
 	{
-		dev_err(&s->dev->dev, "vma->vm_end - vma->vm_start != %i, got: %lu\n", DMA_BUFFER_TOTAL_SIZE, vma->vm_end - vma->vm_start);
+		dev_err(&s->dev->dev, "vma->vm_end - vma->vm_start != %i, got: %lu\n", totalBufferSize, vma->vm_end - vma->vm_start);
 		return -EINVAL;
 	}
 
 	if (vma->vm_pgoff == 0)
 		is_tx = 1;
-	else if (vma->vm_pgoff == (DMA_BUFFER_TOTAL_SIZE >> PAGE_SHIFT))
+	else if (vma->vm_pgoff == (totalBufferSize >> PAGE_SHIFT))
 		is_tx = 0;
 	else
 	{
@@ -757,7 +751,7 @@ static int litepcie_mmap(struct file *file, struct vm_area_struct *vma)
 		return -EINVAL;
 	}
 
-	for (i = 0; i < DMA_BUFFER_COUNT; i++) {
+	for (i = 0; i < chan->dma.bufferCount; i++) {
 		if (is_tx)
 			pfn = __pa(chan->dma.reader_addr[i]) >> PAGE_SHIFT;
 		else
@@ -766,8 +760,8 @@ static int litepcie_mmap(struct file *file, struct vm_area_struct *vma)
 		 * Note: the memory is cached, so the user must explicitly
 		 * flush the CPU caches on architectures which require it.
 		 */
-		if (remap_pfn_range(vma, vma->vm_start + i * DMA_BUFFER_SIZE, pfn,
-				    DMA_BUFFER_SIZE, vma->vm_page_prot)) {
+		if (remap_pfn_range(vma, vma->vm_start + i * chan->dma.bufferSize, pfn,
+				    chan->dma.bufferSize, vma->vm_page_prot)) {
 			dev_err(&s->dev->dev, "mmap remap_pfn_range failed\n");
 			return -EAGAIN;
 		}
@@ -799,7 +793,7 @@ static unsigned int litepcie_poll(struct file *file, poll_table *wait)
 	if ((chan->dma.writer_hw_count - chan->dma.writer_sw_count) > 1)
 		mask |= POLLIN | POLLRDNORM;
 
-	if ((chan->dma.reader_sw_count - chan->dma.reader_hw_count) < DMA_BUFFER_COUNT-2)
+	if ((chan->dma.reader_sw_count - chan->dma.reader_hw_count) < chan->dma.bufferCount-2)
 		mask |= POLLOUT | POLLWRNORM;
 
 	return mask;
@@ -923,7 +917,7 @@ static long litepcie_ioctl(struct file *file, unsigned int cmd,
 			/* enable / disable DMA */
 			if (m.enable) {
 				//dev_info(&dev->dev->dev, "%s DMA writer enable\n", file->f_path.dentry->d_iname);
-				if(m.write_size > DMA_BUFFER_SIZE || m.write_size <= 0)
+				if(m.write_size > chan->dma.bufferSize || m.write_size <= 0)
 				{
 					ret = -EINVAL;
 					break;
@@ -992,12 +986,12 @@ static long litepcie_ioctl(struct file *file, unsigned int cmd,
 		struct litepcie_ioctl_mmap_dma_info m;
 
 		m.dma_tx_buf_offset = 0;
-		m.dma_tx_buf_size = DMA_BUFFER_SIZE;
-		m.dma_tx_buf_count = DMA_BUFFER_COUNT;
+		m.dma_tx_buf_size = chan->dma.bufferSize;
+		m.dma_tx_buf_count = chan->dma.bufferCount;
 
-		m.dma_rx_buf_offset = DMA_BUFFER_TOTAL_SIZE;
-		m.dma_rx_buf_size = DMA_BUFFER_SIZE;
-		m.dma_rx_buf_count = DMA_BUFFER_COUNT;
+		m.dma_rx_buf_offset = chan->dma.bufferCount * chan->dma.bufferSize;
+		m.dma_rx_buf_size = chan->dma.bufferSize;
+		m.dma_rx_buf_count = chan->dma.bufferCount;
 
 		if (copy_to_user((void *)arg, &m, sizeof(m))) {
 			ret = -EFAULT;
@@ -1397,7 +1391,26 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 		litepcie_dev->irqs += 1;
 	}
 
-	litepcie_dev->channels = DMA_CHANNELS;
+	uint32_t dmaBufferCount = MAX_DMA_BUFFER_COUNT;
+	uint32_t dmaBufferSize = 8196;
+	int32_t dmaChannels = litepcie_readl(litepcie_dev, CSR_CNTRL_NDMA_ADDR);
+	dev_dbg(&dev->dev, "DMA channel count: %i", dmaChannels);
+	if (dmaChannels > MAX_DMA_CHANNEL_COUNT || dmaChannels < 0)
+	{
+		dev_err(&dev->dev, "Invalid DMA channel count(%i)\n", dmaChannels);
+		dmaChannels = 0;
+	}
+
+	if (dev->subsystem_vendor == XILINX_FPGA_VENDOR_ID && dev->subsystem_device == XTRX_FPGA_DEVICE_ID)
+	{
+		litepcie_dev->channels = dmaChannels;
+		dmaBufferSize = 8196;
+	}
+	else
+	{
+		litepcie_dev->channels = dmaChannels;
+		dmaBufferSize = 32768;
+	}
 
 	/* create all chardev in /dev */
 	ret = litepcie_alloc_chdev(litepcie_dev);
@@ -1407,8 +1420,10 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 	}
 
 	for (i = 0; i < litepcie_dev->channels; i++) {
+		litepcie_dev->chan[i].dma.bufferCount = dmaBufferCount;
+		litepcie_dev->chan[i].dma.bufferSize = dmaBufferSize;
 		litepcie_dev->chan[i].index = i;
-		litepcie_dev->chan[i].block_size = DMA_BUFFER_SIZE;
+		litepcie_dev->chan[i].block_size = dmaBufferSize;
 		litepcie_dev->chan[i].minor = litepcie_dev->minor_base + i;
 		litepcie_dev->chan[i].litepcie_dev = litepcie_dev;
 		litepcie_dev->chan[i].dma.writer_lock = 0;
@@ -1545,6 +1560,7 @@ static void litepcie_pci_remove(struct pci_dev *dev)
 static const struct pci_device_id litepcie_pci_ids[] = {
 	{PCI_DEVICE(XILINX_FPGA_VENDOR_ID, XILINX_FPGA_DEVICE_ID)},
 	{PCI_DEVICE(ALTERA_FPGA_VENDOR_ID, ALTERA_FPGA_DEVICE_ID)},
+	{PCI_DEVICE(XILINX_FPGA_VENDOR_ID, XTRX_FPGA_DEVICE_ID)},
 	{0 }
 };
 MODULE_DEVICE_TABLE(pci, litepcie_pci_ids);
