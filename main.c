@@ -12,25 +12,10 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/types.h>
-#include <linux/ioctl.h>
-#include <linux/init.h>
 #include <linux/errno.h>
-#include <linux/mm.h>
-#include <linux/fs.h>
-#include <linux/mmtimer.h>
-#include <linux/miscdevice.h>
-#include <linux/posix-timers.h>
-#include <linux/interrupt.h>
-#include <linux/time.h>
-#include <linux/math64.h>
-#include <linux/mutex.h>
-#include <linux/slab.h>
 #include <linux/pci.h>
 #include <linux/pci_regs.h>
 #include <linux/delay.h>
-#include <linux/wait.h>
-#include <linux/log2.h>
 #include <linux/poll.h>
 #include <linux/cdev.h>
 #include <linux/platform_device.h>
@@ -38,7 +23,6 @@
 #include "litepcie.h"
 #include "csr.h"
 #include "config.h"
-#include "flags.h"
 
 #define XILINX_FPGA_VENDOR_ID 0x10EE
 #define XILINX_FPGA_DEVICE_ID 0x7022
@@ -53,8 +37,6 @@
 //#define DEBUG_POLL
 //#define DEBUG_READ
 //#define DEBUG_WRITE
-
-#define READ_BUFFER_SIZE 4096
 
 #define LITEPCIE_NAME "litepcie"
 #define LITEPCIE_MINOR_COUNT 32
@@ -87,6 +69,11 @@ struct litepcie_dma_chan {
 	uint8_t reader_irqFreq;
 };
 
+struct lime_driver_data {
+	char* name;
+	int dma_buffer_size;
+};
+
 struct litepcie_chan {
 	struct litepcie_device *litepcie_dev;
 	struct litepcie_dma_chan dma;
@@ -112,9 +99,8 @@ struct litepcie_device {
 	int irqs;
 	int channels;
 	struct cdev control_cdev; // non DMA channel for control packets
+	const struct lime_driver_data *driver_data;
 };
-
-struct litepcie_device* gMainDevice;
 
 struct litepcie_chan_priv {
 	struct litepcie_chan *chan;
@@ -1080,13 +1066,12 @@ static long litepcie_ioctl(struct file *file, unsigned int cmd,
 
 static int litepcie_ctrl_open(struct inode *inode, struct file *file)
 {
-	struct litepcie_device *s = gMainDevice;
-	if (!s)
-		return -ENODEV;
-	file->private_data = s;
+	pr_info("Open %s\n", file->f_path.dentry->d_iname);
+	struct litepcie_device *ctrlDevice = container_of(inode->i_cdev, struct litepcie_device, control_cdev);
+	file->private_data = ctrlDevice;
 
-	litepcie_writel(s, CSR_CNTRL_TEST_ADDR, 55);
-	if(litepcie_readl(s, CSR_CNTRL_TEST_ADDR) != 55){
+	litepcie_writel(ctrlDevice, CSR_CNTRL_TEST_ADDR, 0x55);
+	if(litepcie_readl(ctrlDevice, CSR_CNTRL_TEST_ADDR) != 0x55){
 		printk(KERN_ERR LITEPCIE_NAME " CSR register test failed\n");
 		return -EIO;
 	}
@@ -1183,6 +1168,13 @@ static int litepcie_alloc_chdev(struct litepcie_device *s)
 	int index;
 
 	index = litepcie_minor_idx;
+	const char* prefix = "Lime";
+	char deviceName[64];
+	int suffix = 0;
+	if (s->driver_data && s->driver_data->name)
+		snprintf(deviceName, sizeof(deviceName)-1, "%s%s%i", prefix, s->driver_data->name, suffix);
+	else
+		snprintf(deviceName, sizeof(deviceName)-1, "%sUnknown%i", prefix, suffix);
 
 	s->minor_base = litepcie_minor_idx;
 	for (i = 0; i < s->channels; i++) {
@@ -1205,8 +1197,8 @@ static int litepcie_alloc_chdev(struct litepcie_device *s)
 
 	index = litepcie_minor_idx;
 	for (i = 0; i < s->channels; i++) {
-		char tempName[32];
-		snprintf(tempName, sizeof(tempName)-1, "Lime5GRadio%d_trx%d", 0, i);
+		char tempName[64];
+		snprintf(tempName, sizeof(tempName)-1, "%s_trx%d", deviceName, i);
 		dev_info(&s->dev->dev, "Creating /dev/%s\n", tempName);
 		if (!device_create(litepcie_class, NULL, MKDEV(litepcie_major, index), NULL, tempName)) {
 			ret = -EINVAL;
@@ -1217,8 +1209,8 @@ static int litepcie_alloc_chdev(struct litepcie_device *s)
 	}
 
 	// additionally alloc control channel
-	dev_info(&s->dev->dev, "Creating /dev/Lime5GRadio%d_control\n", 0);
-	if (!device_create(litepcie_class, NULL, MKDEV(litepcie_major, index), NULL, "Lime5GRadio%d_control", 0)) {
+	dev_info(&s->dev->dev, "Creating /dev/%s_control\n", deviceName);
+	if (!device_create(litepcie_class, NULL, MKDEV(litepcie_major, index), NULL, "%s_control", deviceName)) {
 		ret = -EINVAL;
 		dev_err(&s->dev->dev, "Failed to create device\n");
 		goto fail_create_control;
@@ -1301,16 +1293,19 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 	int i;
 	char fpga_identifier[256];
 	struct litepcie_device *litepcie_dev = NULL;
-	//struct resource *tty_res = NULL;
+	struct lime_driver_data *driver_data = (struct lime_driver_data*)id->driver_data;
 
-	dev_info(&dev->dev, "\e[1m[Probing device]\e[0m\n");
+	char *devName = "";
+	if (driver_data && driver_data->name)
+		devName = driver_data->name;
+	dev_info(&dev->dev, "\e[1m[Probing device]\e[0m %s\n", devName);
 
 	litepcie_dev = devm_kzalloc(&dev->dev, sizeof(struct litepcie_device), GFP_KERNEL);
 	if (!litepcie_dev) {
 		ret = -ENOMEM;
 		goto fail1;
 	}
-	gMainDevice = litepcie_dev;
+	litepcie_dev->driver_data = driver_data;
 
 	pci_set_drvdata(dev, litepcie_dev);
 	litepcie_dev->dev = dev;
@@ -1391,26 +1386,21 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 		litepcie_dev->irqs += 1;
 	}
 
-	uint32_t dmaBufferCount = MAX_DMA_BUFFER_COUNT;
 	uint32_t dmaBufferSize = 8196;
+	if (driver_data && driver_data->dma_buffer_size > 0)
+		dmaBufferSize = driver_data->dma_buffer_size;
+	else
+		dev_warn(&dev->dev, "DMA buffer size not specified, defaulting to %i", dmaBufferSize);
+
+	uint32_t dmaBufferCount = MAX_DMA_BUFFER_COUNT;
 	int32_t dmaChannels = litepcie_readl(litepcie_dev, CSR_CNTRL_NDMA_ADDR);
-	dev_dbg(&dev->dev, "DMA channel count: %i", dmaChannels);
 	if (dmaChannels > MAX_DMA_CHANNEL_COUNT || dmaChannels < 0)
 	{
 		dev_err(&dev->dev, "Invalid DMA channel count(%i)\n", dmaChannels);
 		dmaChannels = 0;
 	}
-
-	if (dev->subsystem_vendor == XILINX_FPGA_VENDOR_ID && dev->subsystem_device == XTRX_FPGA_DEVICE_ID)
-	{
-		litepcie_dev->channels = dmaChannels;
-		dmaBufferSize = 8196;
-	}
-	else
-	{
-		litepcie_dev->channels = dmaChannels;
-		dmaBufferSize = 32768;
-	}
+	dev_info(&dev->dev, "DMA channels: %i, buffer size: %i, buffers count: %i", dmaChannels, dmaBufferSize, dmaBufferCount);
+	litepcie_dev->channels = dmaChannels;
 
 	/* create all chardev in /dev */
 	ret = litepcie_alloc_chdev(litepcie_dev);
@@ -1557,10 +1547,23 @@ static void litepcie_pci_remove(struct pci_dev *dev)
 	pci_free_irq_vectors(dev);
 }
 
+static const struct lime_driver_data lime_device_QPCIE = {
+	.name = "QPCIe",
+	.dma_buffer_size = 32768
+};
+static const struct lime_driver_data lime_device_X3 = {
+	.name = "5GRadio",
+	.dma_buffer_size = 32768
+};
+static const struct lime_driver_data lime_device_XTRX = {
+	.name = "XTRX",
+	.dma_buffer_size = 8192
+};
+
 static const struct pci_device_id litepcie_pci_ids[] = {
-	{PCI_DEVICE(XILINX_FPGA_VENDOR_ID, XILINX_FPGA_DEVICE_ID)},
-	{PCI_DEVICE(ALTERA_FPGA_VENDOR_ID, ALTERA_FPGA_DEVICE_ID)},
-	{PCI_DEVICE(XILINX_FPGA_VENDOR_ID, XTRX_FPGA_DEVICE_ID)},
+	{PCI_DEVICE(XILINX_FPGA_VENDOR_ID, XILINX_FPGA_DEVICE_ID), .driver_data = (kernel_ulong_t)&lime_device_X3},
+	{PCI_DEVICE(XILINX_FPGA_VENDOR_ID, XTRX_FPGA_DEVICE_ID), .driver_data = (kernel_ulong_t)&lime_device_XTRX},
+	{PCI_DEVICE(ALTERA_FPGA_VENDOR_ID, ALTERA_FPGA_DEVICE_ID), .driver_data = (kernel_ulong_t)&lime_device_QPCIE},
 	{0 }
 };
 MODULE_DEVICE_TABLE(pci, litepcie_pci_ids);
