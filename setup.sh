@@ -18,8 +18,5 @@ fi
 
 sh $SOURCE_LOC/litepcie_loader.sh
 
-cp litepcie.service /etc/systemd/system/
-systemctl enable litepcie.service
-
 exit 0
 
