@@ -19,6 +19,7 @@
 #include <linux/poll.h>
 #include <linux/cdev.h>
 #include <linux/platform_device.h>
+#include <linux/dma-mapping.h>
 
 #include "litepcie.h"
 #include "csr.h"
@@ -1205,10 +1206,49 @@ int compare_revisions(struct revision d1, struct revision d2)
 }
 /* from stackoverflow */
 
+void FreeIRQs(struct litepcie_device* device)
+{
+	dev_info(&device->dev->dev, "FreeIRQs %i\n", device->irqs);
+	if (device->irqs <= 0)
+		return;
+
+	for (int i=device->irqs-1; i>=0; --i)
+	{
+		int irq = pci_irq_vector(device->dev, i);
+		free_irq(irq, device);
+	}
+	device->irqs = 0;
+	pci_free_irq_vectors(device->dev);
+}
+
+int AllocateIRQs(struct litepcie_device* device)
+{
+	struct pci_dev *dev = device->dev;
+	int irqs = pci_alloc_irq_vectors(dev, 1, 32, PCI_IRQ_MSI);
+	if (irqs < 0) {
+		dev_err(&dev->dev, "Failed to enable MSI\n");
+		return irqs;
+	}
+	dev_info(&dev->dev, "%d MSI IRQs allocated.\n", irqs);
+
+	device->irqs = 0;
+	for (int i = 0; i < irqs; i++)
+	{
+		int irq = pci_irq_vector(dev, i);
+		int ret = request_irq(irq, litepcie_interrupt, IRQF_SHARED, LITEPCIE_NAME, device);
+		if (ret < 0) {
+			dev_err(&dev->dev, " Failed to allocate IRQ %d\n", dev->irq);
+			FreeIRQs(device);
+			return ret;
+		}
+		device->irqs += 1;
+	}
+	return 0;
+}
+
 static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *id)
 {
 	int ret = 0;
-	int irqs = 0;
 	uint8_t rev_id;
 	int i;
 	char fpga_identifier[256];
@@ -1218,7 +1258,7 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 	char *devName = "";
 	if (driver_data && driver_data->name)
 		devName = driver_data->name;
-	dev_info(&dev->dev, "\e[1m[Probing device]\e[0m %s\n", devName);
+	dev_info(&dev->dev, "[Probing device] %s\n", devName);
 
 	litepcie_dev = devm_kzalloc(&dev->dev, sizeof(struct litepcie_device), GFP_KERNEL);
 	if (!litepcie_dev) {
@@ -1276,35 +1316,15 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 	dev_info(&dev->dev, "Version %s\n", fpga_identifier);
 
 	pci_set_master(dev);
-	ret = pci_set_dma_mask(dev, DMA_BIT_MASK(32));
+	ret = dma_set_mask_and_coherent(&dev->dev, DMA_BIT_MASK(64));
 	if (ret) {
 		dev_err(&dev->dev, "Failed to set DMA mask\n");
 		goto fail1;
 	};
 
-	irqs = pci_alloc_irq_vectors(dev, 1, 32, PCI_IRQ_MSI);
-	if (irqs < 0) {
-		dev_err(&dev->dev, "Failed to enable MSI\n");
-		ret = irqs;
-		goto fail1;
-	}
-	dev_info(&dev->dev, "%d MSI IRQs allocated.\n", irqs);
-
-	litepcie_dev->irqs = 0;
-	for (i = 0; i < irqs; i++) {
-		int irq = pci_irq_vector(dev, i);
-
-		ret = request_irq(irq, litepcie_interrupt, IRQF_SHARED, LITEPCIE_NAME, litepcie_dev);
-		if (ret < 0) {
-			dev_err(&dev->dev, " Failed to allocate IRQ %d\n", dev->irq);
-			while (--i >= 0) {
-				irq = pci_irq_vector(dev, i);
-				free_irq(irq, dev);
-			}
-			goto fail2;
-		}
-		litepcie_dev->irqs += 1;
-	}
+	ret = AllocateIRQs(litepcie_dev);
+	if (ret < 0)
+		goto fail2;
 
 	uint32_t dmaBufferSize = 8196;
 	if (driver_data && driver_data->dma_buffer_size > 0)
@@ -1346,9 +1366,11 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 	litepcie_dev->chan[i].dma.writer_interrupt = PCIE_DMA##x##_WRITER_INTERRUPT;\
 	litepcie_dev->chan[i].dma.reader_interrupt = PCIE_DMA##x##_READER_INTERRUPT;\
 }\
-break
+break\
+
 		CASE_DMA(2);
 		CASE_DMA(1);
+#undef CASE_DMA
 		default:
 			{
 				litepcie_dev->chan[i].dma.base = CSR_PCIE_DMA0_BASE;
@@ -1386,7 +1408,7 @@ break
 fail3:
 	litepcie_free_chdev(litepcie_dev);
 fail2:
-	pci_free_irq_vectors(dev);
+	FreeIRQs(litepcie_dev);
 fail1:
 	return ret;
 }
@@ -1402,15 +1424,9 @@ static void litepcie_pci_remove(struct pci_dev *dev)
 	/* Disable all interrupts */
 	litepcie_writel(litepcie_dev, CSR_PCIE_MSI_ENABLE_ADDR, 0);
 
-	/* Free all interrupts */
-	for (int i = 0; i < litepcie_dev->irqs; i++) {
-		int irq = pci_irq_vector(dev, i);
-		free_irq(irq, litepcie_dev);
-	}
-
+	FreeIRQs(litepcie_dev);
 	platform_device_unregister(litepcie_dev->uart);
 	litepcie_free_chdev(litepcie_dev);
-	pci_free_irq_vectors(dev);
 }
 
 static const struct lime_driver_data lime_device_QPCIE = {
