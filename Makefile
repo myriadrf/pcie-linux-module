@@ -1,7 +1,9 @@
 # Makefile for kernel module
 KERNEL_VERSION:=$(shell uname -r)
 KERNEL_PATH?=/lib/modules/$(KERNEL_VERSION)/build
-ARCH?=$(shell uname -m)
+# ARCH?=$(shell uname -m)
+# ARCH might be 'aarch64', but the linux lib directories might be named 'arm64'
+ARCH?=$(shell if [ "$(shell uname -m)" = "aarch64" ] && [ ! -d $(KERNEL_PATH)/arch/$(shell uname -m) ]; then echo "arm64"; else echo $(shell uname -m); fi)
 
 obj-m = litepcie.o liteuart.o
 litepcie-objs = main.o
