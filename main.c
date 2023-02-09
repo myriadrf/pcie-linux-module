@@ -20,6 +20,7 @@
 #include <linux/cdev.h>
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
+#include <linux/dma-direct.h>
 
 #include "litepcie.h"
 #include "csr.h"
@@ -32,6 +33,8 @@
 #define XTRX_FPGA_DEVICE_ID   0x7023
 
 #define EXPECTED_PCI_REVISION_ID 1
+
+#define VA_DMA_ADDR_FIXUP
 
 //#define DEBUG_CSR
 //#define DEBUG_MSI
@@ -667,17 +670,29 @@ static int litepcie_mmap(struct file *file, struct vm_area_struct *vma)
 	}
 
 	for (i = 0; i < chan->dma.bufferCount; i++) {
+#ifdef VA_DMA_ADDR_FIXUP
+		void *va = NULL;
+		if (is_tx)
+			va = phys_to_virt(dma_to_phys(&s->dev->dev, chan->dma.reader_handle[i]));
+		else
+			va = phys_to_virt(dma_to_phys(&s->dev->dev, chan->dma.writer_handle[i]));
+		pfn = __pa(va) >> PAGE_SHIFT;
+		vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+#else
 		if (is_tx)
 			pfn = __pa(chan->dma.reader_addr[i]) >> PAGE_SHIFT;
 		else
 			pfn = __pa(chan->dma.writer_addr[i]) >> PAGE_SHIFT;
+#endif
 		/*
 		 * Note: the memory is cached, so the user must explicitly
 		 * flush the CPU caches on architectures which require it.
 		 */
-		if (remap_pfn_range(vma, vma->vm_start + i * chan->dma.bufferSize, pfn,
-				    chan->dma.bufferSize, vma->vm_page_prot)) {
-			dev_err(&s->dev->dev, "mmap remap_pfn_range failed\n");
+		void* usrPtr = vma->vm_start + i * chan->dma.bufferSize;
+		int remapRet = io_remap_pfn_range(vma, usrPtr, pfn, chan->dma.bufferSize, vma->vm_page_prot);
+		if(remapRet)
+		{
+			dev_err(&s->dev->dev, "mmap io_remap_pfn_range failed %i\n", remapRet);
 			return -EAGAIN;
 		}
 	}
@@ -1316,6 +1331,12 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 	dev_info(&dev->dev, "Version %s\n", fpga_identifier);
 
 	pci_set_master(dev);
+	ret = pci_set_consistent_dma_mask(dev, DMA_BIT_MASK(64));
+	if (ret) {
+		dev_err(&dev->dev, "Failed to set pci_set_consistent_dma_mask\n");
+		goto fail1;
+	};
+
 	ret = dma_set_mask_and_coherent(&dev->dev, DMA_BIT_MASK(64));
 	if (ret) {
 		dev_err(&dev->dev, "Failed to set DMA mask\n");
