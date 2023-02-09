@@ -5,6 +5,10 @@ KERNEL_PATH?=/lib/modules/$(KERNEL_VERSION)/build
 # ARCH might be 'aarch64', but the linux lib directories might be named 'arm64'
 ARCH?=$(shell if [ "$(shell uname -m)" = "aarch64" ] && [ ! -d $(KERNEL_PATH)/arch/$(shell uname -m) ]; then echo "arm64"; else echo $(shell uname -m); fi)
 
+ADDITIONAL_C_DEFINES?=$(shell if [ ${ARCH} = "arm64" ]; then echo "-DVA_DMA_ADDR_FIXUP"; fi)
+
+ccflags-y := ${ADDITIONAL_C_DEFINES}
+
 obj-m = litepcie.o
 litepcie-objs = main.o
 

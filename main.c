@@ -34,7 +34,8 @@
 
 #define EXPECTED_PCI_REVISION_ID 1
 
-#define VA_DMA_ADDR_FIXUP
+// Raspberry pi needs DMA buffers addresses recalc to properly mmap into userspace
+//#define VA_DMA_ADDR_FIXUP
 
 //#define DEBUG_CSR
 //#define DEBUG_MSI
@@ -688,7 +689,7 @@ static int litepcie_mmap(struct file *file, struct vm_area_struct *vma)
 		 * Note: the memory is cached, so the user must explicitly
 		 * flush the CPU caches on architectures which require it.
 		 */
-		void* usrPtr = vma->vm_start + i * chan->dma.bufferSize;
+		size_t usrPtr = vma->vm_start + i * chan->dma.bufferSize;
 		int remapRet = io_remap_pfn_range(vma, usrPtr, pfn, chan->dma.bufferSize, vma->vm_page_prot);
 		if(remapRet)
 		{
