@@ -1506,7 +1506,7 @@ fail1:
 static void litepcie_pci_remove(struct pci_dev *dev)
 {
 	struct litepcie_device *litepcie_dev = pci_get_drvdata(dev);
-	dev_info(&dev->dev, "Removing device]\n");
+	dev_info(&dev->dev, "[Removing device]\n");
 
 	/* Stop the DMAs */
 	litepcie_stop_dma(litepcie_dev);
@@ -1526,7 +1526,7 @@ static const struct lime_driver_data lime_device_QPCIE = {
 	.dma_buffer_size = 32768
 };
 static const struct lime_driver_data lime_device_X3 = {
-	.name = "5GRadio",
+	.name = "X3",
 	.dma_buffer_size = 32768
 };
 static const struct lime_driver_data lime_device_XTRX = {
