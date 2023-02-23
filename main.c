@@ -595,7 +595,7 @@ static ssize_t submiteWrite(struct file *file, size_t bufSize, bool genIRQ)
 	chan->dma.reader_hw_count = litepcie_readl(s, chan->dma.base + PCIE_DMA_READER_TABLE_LOOP_STATUS_OFFSET) & 0xFFFF;
 
 	const uint8_t pendingBuffers = chan->dma.reader_sw_count-chan->dma.reader_hw_count;
-	const uint8_t maxDMApending = chan->dma.bufferCount - 32;
+	const uint8_t maxDMApending = chan->dma.bufferCount - 1;
 	const bool canSubmit = pendingBuffers < maxDMApending;
 
 	if (file->f_flags & O_NONBLOCK) {
@@ -761,7 +761,7 @@ static unsigned int litepcie_poll(struct file *file, poll_table *wait)
 		mask |= POLLIN | POLLRDNORM;
 
 	uint16_t txPending = (uint16_t)chan->dma.reader_sw_count - (uint16_t)chan->dma.reader_hw_count;
-	if (txPending < chan->dma.bufferCount-16)
+	if (txPending < chan->dma.bufferCount * 3/4)
 		mask |= POLLOUT | POLLWRNORM;
 
 #ifdef DEBUG_POLL
