@@ -20,7 +20,6 @@
 #include <linux/cdev.h>
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
-#include <linux/dma-direct.h>
 
 #include "litepcie.h"
 #include "csr.h"
@@ -33,9 +32,6 @@
 #define XTRX_FPGA_DEVICE_ID   0x7023
 
 #define EXPECTED_PCI_REVISION_ID 1
-
-// Raspberry pi needs DMA buffers addresses recalc to properly mmap into userspace
-//#define VA_DMA_ADDR_FIXUP
 
 //#define DEBUG_CSR
 //#define DEBUG_MSI
