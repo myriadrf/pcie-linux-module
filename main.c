@@ -158,7 +158,7 @@ static int litepcie_dma_init(struct litepcie_device *s)
 		struct litepcie_dma_chan *dmachan = &s->chan[i].dma;
 		/* for each dma buffer */
 		for (int j = 0; j < dmachan->bufferCount; j++) {
-			dmachan->writer_addr[j] = kmalloc(dmachan->bufferSize, GFP_KERNEL | GFP_DMA);
+			dmachan->writer_addr[j] = kmalloc(dmachan->bufferSize, GFP_KERNEL);
 			dmachan->writer_handle[j] = dma_map_single(&s->dev->dev, dmachan->writer_addr[j], dmachan->bufferSize, DMA_FROM_DEVICE);
 #ifdef DEBUG_MEM
 			dev_dbg(&s->dev->dev, "Writer[%i]: va:%p pa:%llx dma:%llx\n", j, dmachan->writer_addr[j], virt_to_phys(dmachan->writer_addr[j]), dmachan->writer_handle[j]);
@@ -176,7 +176,7 @@ static int litepcie_dma_init(struct litepcie_device *s)
 
 		for (int j = 0; j < dmachan->bufferCount; j++) {
 			/* allocate rd */
-			dmachan->reader_addr[j] = kmalloc(dmachan->bufferSize, GFP_KERNEL | GFP_DMA);
+			dmachan->reader_addr[j] = kmalloc(dmachan->bufferSize, GFP_KERNEL);
 			dmachan->reader_handle[j] = dma_map_single(&s->dev->dev, dmachan->reader_addr[j], dmachan->bufferSize, DMA_TO_DEVICE);
 #ifdef DEBUG_MEM
 			dev_dbg(&s->dev->dev, "Reader[%i]: va:%p pa:%llx dma:%llx\n", j, dmachan->reader_addr[j], virt_to_phys(dmachan->reader_addr[j]), dmachan->reader_handle[j]);
