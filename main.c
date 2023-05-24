@@ -71,7 +71,7 @@ struct litepcie_dma_chan {
 
 struct lime_driver_data {
 	char* name;
-	int dma_buffer_size;
+	uint32_t dma_buffer_size;
 };
 
 struct litepcie_chan {
@@ -888,9 +888,9 @@ static long litepcie_ioctl(struct file *file, unsigned int cmd,
 		if (m.enable != chan->dma.writer_enable) {
 			/* enable / disable DMA */
 			if (m.enable) {
-				//dev_info(&dev->dev->dev, "%s DMA writer enable\n", file->f_path.dentry->d_iname);
 				if(m.write_size > chan->dma.bufferSize || m.write_size <= 0)
 				{
+					dev_info(&dev->dev->dev, "%s DMA writer invalid write size %i\n", file->f_path.dentry->d_iname, m.write_size);
 					ret = -EINVAL;
 					break;
 				}
@@ -1406,10 +1406,18 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 
 	pci_set_master(dev);
 
-	ret = dma_set_mask_and_coherent(&dev->dev, DMA_BIT_MASK(32));
-	if (ret) {
-		dev_err(&dev->dev, "Failed to set DMA mask\n");
-		goto fail1;
+	ret = dma_set_mask_and_coherent(&dev->dev, DMA_BIT_MASK(64));
+	if (ret) 
+	{
+		dev_err(&dev->dev, "Failed to set DMA mask 64bit\n");
+		ret = dma_set_mask_and_coherent(&dev->dev, DMA_BIT_MASK(32));
+		if (ret == 0)
+			dev_info(&dev->dev, "DMA mask set 32bit\n");
+		else
+		{
+			dev_err(&dev->dev, "Failed to set DMA mask 32bit\n");
+			goto fail1;
+		}
 	};
 
 	ret = AllocateIRQs(litepcie_dev);
@@ -1527,7 +1535,7 @@ static const struct lime_driver_data lime_device_QPCIE = {
 };
 static const struct lime_driver_data lime_device_X3 = {
 	.name = "X3",
-	.dma_buffer_size = 32768
+	.dma_buffer_size = 65536
 };
 static const struct lime_driver_data lime_device_XTRX = {
 	.name = "XTRX",
