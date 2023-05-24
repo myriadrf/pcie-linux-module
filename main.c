@@ -239,7 +239,7 @@ static void ClearDMAReaderCounters(struct litepcie_dma_chan *dmachan)
 	dmachan->reader_sw_count = 0;
 }
 
-static int litepcie_dma_writer_request(struct litepcie_device *s, struct litepcie_dma_chan *dmachan, dma_addr_t dmaBufAddr, uint16_t size, bool genIRQ)
+static int litepcie_dma_writer_request(struct litepcie_device *s, struct litepcie_dma_chan *dmachan, dma_addr_t dmaBufAddr, uint32_t size, bool genIRQ)
 {
 	if(size == 0 || size > dmachan->bufferSize)
 	{
@@ -263,7 +263,7 @@ static int litepcie_dma_writer_request(struct litepcie_device *s, struct litepci
 	return 0;
 }
 
-static int litepcie_dma_reader_request(struct litepcie_device *s, struct litepcie_dma_chan *dmachan, dma_addr_t dmaBufAddr, uint16_t size, bool genIRQ)
+static int litepcie_dma_reader_request(struct litepcie_device *s, struct litepcie_dma_chan *dmachan, dma_addr_t dmaBufAddr, uint32_t size, bool genIRQ)
 {
 	if(size == 0 || size > dmachan->bufferSize)
 	{
@@ -287,7 +287,7 @@ static int litepcie_dma_reader_request(struct litepcie_device *s, struct litepci
 	return 0;
 }
 
-static void litepcie_dma_writer_start(struct litepcie_device *s, int chan_num, uint16_t write_size, uint8_t irqFreq)
+static void litepcie_dma_writer_start(struct litepcie_device *s, int chan_num, uint32_t write_size, uint8_t irqFreq)
 {
 	struct litepcie_dma_chan *dmachan = &s->chan[chan_num].dma;
 	if(write_size == 0 || write_size > dmachan->bufferSize)
