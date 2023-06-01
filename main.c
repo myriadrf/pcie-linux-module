@@ -1406,18 +1406,11 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 
 	pci_set_master(dev);
 
-	ret = dma_set_mask_and_coherent(&dev->dev, DMA_BIT_MASK(64));
+	ret = dma_set_mask_and_coherent(&dev->dev, DMA_BIT_MASK(32));
 	if (ret) 
 	{
-		dev_err(&dev->dev, "Failed to set DMA mask 64bit\n");
-		ret = dma_set_mask_and_coherent(&dev->dev, DMA_BIT_MASK(32));
-		if (ret == 0)
-			dev_info(&dev->dev, "DMA mask set 32bit\n");
-		else
-		{
-			dev_err(&dev->dev, "Failed to set DMA mask 32bit\n");
-			goto fail1;
-		}
+		dev_err(&dev->dev, "Failed to set DMA mask 32bit\n");
+		goto fail1;
 	};
 
 	ret = AllocateIRQs(litepcie_dev);
