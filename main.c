@@ -1459,6 +1459,11 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 }\
 break\
 
+		CASE_DMA(7);
+		CASE_DMA(6);
+		CASE_DMA(5);
+		CASE_DMA(4);
+		CASE_DMA(3);
 		CASE_DMA(2);
 		CASE_DMA(1);
 #undef CASE_DMA
