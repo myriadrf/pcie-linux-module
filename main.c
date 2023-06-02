@@ -1528,7 +1528,7 @@ static const struct lime_driver_data lime_device_QPCIE = {
 };
 static const struct lime_driver_data lime_device_X3 = {
 	.name = "X3",
-	.dma_buffer_size = 32768
+	.dma_buffer_size = 8192
 };
 static const struct lime_driver_data lime_device_XTRX = {
 	.name = "XTRX",
