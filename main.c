@@ -24,6 +24,7 @@
 #include "litepcie.h"
 #include "csr.h"
 #include "config.h"
+#include "boards.h"
 
 #define XILINX_FPGA_VENDOR_ID 0x10EE
 #define XILINX_FPGA_DEVICE_ID 0x7022
@@ -69,9 +70,13 @@ struct litepcie_dma_chan {
 	uint8_t reader_irqFreq;
 };
 
-struct lime_driver_data {
-	char* name;
-	uint32_t dma_buffer_size;
+struct deviceInfo {
+	uint64_t serialNumber;
+	uint16_t firmware;
+	uint8_t boardId;
+	uint8_t protocol;
+	uint8_t hardwareVer;
+	char devName[128];
 };
 
 struct litepcie_chan {
@@ -99,7 +104,7 @@ struct litepcie_device {
 	int irqs;
 	int channels;
 	struct cdev control_cdev; // non DMA channel for control packets
-	const struct lime_driver_data *driver_data;
+	struct deviceInfo info;
 };
 
 struct litepcie_chan_priv {
@@ -1183,13 +1188,9 @@ static int litepcie_alloc_chdev(struct litepcie_device *s)
 	int ret;
 
 	int index = litepcie_minor_idx;
-	const char* prefix = "Lime";
 	char deviceName[64];
 	int suffix = 0;
-	if (s->driver_data && s->driver_data->name)
-		snprintf(deviceName, sizeof(deviceName)-1, "%s%s%i", prefix, s->driver_data->name, suffix);
-	else
-		snprintf(deviceName, sizeof(deviceName)-1, "%sUnknown%i", prefix, suffix);
+	snprintf(deviceName, sizeof(deviceName)-1, "%s%i", s->info.devName, suffix);
 
 	s->minor_base = litepcie_minor_idx;
 	for (int i = 0; i < s->channels; i++) {
@@ -1335,6 +1336,73 @@ int AllocateIRQs(struct litepcie_device* device)
 	return 0;
 }
 
+struct LMS64CPacket
+{
+    uint8_t cmd;
+    uint8_t status;
+    uint8_t blockCount;
+    uint8_t periphID;
+    uint8_t reserved[4];
+    uint8_t payload[56];
+};
+
+static int ReadInfo(struct litepcie_device* s)
+{
+	memset(&s->info, 0, sizeof(s->info));
+
+	struct LMS64CPacket pkt;
+	memset(&pkt, 0, sizeof(pkt));
+	pkt.cmd = 0x00; // GET_INFO
+	uint8_t* buffer = (uint8_t*)&pkt;
+	int count = 64;
+	uint32_t value;
+	for (int i = 0; i < count; i += sizeof(uint32_t))
+	{
+		memcpy(&value, buffer + i, sizeof(value));
+		litepcie_writel(s, CSR_CNTRL_BASE + i, value);
+	}
+
+	for (int n = 0; n < 10; ++n)
+	{
+		value = litepcie_readl(s, CSR_CNTRL_BASE);
+		memcpy(buffer, &value, sizeof(value));
+		if (pkt.status != 0)
+			break;
+		mdelay(10); // wait between reads until MCU gives answer
+	}
+	if (pkt.status == 0)
+		return -EIO;
+
+	for (int i = 0; i < count; i += sizeof(uint32_t))
+	{
+		value = litepcie_readl(s, CSR_CNTRL_BASE + i);
+		memcpy(buffer + i, &value, sizeof(value));
+	}
+
+	s->info.firmware = (pkt.payload[9] << 16) | pkt.payload[0];
+	s->info.boardId =  pkt.payload[1];
+	s->info.protocol =  pkt.payload[2];
+	s->info.hardwareVer =  pkt.payload[3];
+	uint64_t serialNumber = 0;
+    for (int i = 10; i < 18; ++i)
+    {
+        serialNumber <<= 8;
+        serialNumber |= pkt.payload[i];
+    }
+    s->info.serialNumber = serialNumber;
+
+    sprintf(s->info.devName, "%s", GetDeviceName(s->info.boardId));
+
+	dev_info(&s->dev->dev, "[device info] %s FW:%u HW:%u PROTOCOL:%u S/N:0x%016llX \n"
+		, s->info.devName
+		, s->info.firmware
+		, s->info.hardwareVer
+		, s->info.protocol
+		, s->info.serialNumber
+	);
+	return 0;
+}
+
 static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *id)
 {
 	int ret = 0;
@@ -1342,19 +1410,14 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 	int i;
 	char fpga_identifier[256];
 	struct litepcie_device *litepcie_dev = NULL;
-	struct lime_driver_data *driver_data = (struct lime_driver_data*)id->driver_data;
 
-	char *devName = "";
-	if (driver_data && driver_data->name)
-		devName = driver_data->name;
-	dev_info(&dev->dev, "[Probing device] %s\n", devName);
+	dev_info(&dev->dev, "[Probing device]\n");
 
 	litepcie_dev = devm_kzalloc(&dev->dev, sizeof(struct litepcie_device), GFP_KERNEL);
 	if (!litepcie_dev) {
 		ret = -ENOMEM;
 		goto fail1;
 	}
-	litepcie_dev->driver_data = driver_data;
 
 	pci_set_drvdata(dev, litepcie_dev);
 	litepcie_dev->dev = dev;
@@ -1398,7 +1461,6 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 	litepcie_writel(litepcie_dev, CSR_CTRL_RESET_ADDR, 1);
 	msleep(10);
 #endif
-
 	/* Show identifier */
 	for (i = 0; i < 256; i++)
 		fpga_identifier[i] = litepcie_readl(litepcie_dev, CSR_IDENTIFIER_MEM_BASE + i*4);
@@ -1417,11 +1479,27 @@ static int litepcie_pci_probe(struct pci_dev *dev, const struct pci_device_id *i
 	if (ret < 0)
 		goto fail2;
 
+	if (ReadInfo(litepcie_dev) != 0)
+		goto fail2;
+
 	uint32_t dmaBufferSize = 8192;
-	if (driver_data && driver_data->dma_buffer_size > 0)
-		dmaBufferSize = driver_data->dma_buffer_size;
-	else
-		dev_warn(&dev->dev, "DMA buffer size not specified, defaulting to %i", dmaBufferSize);
+
+	switch (litepcie_dev->info.boardId)
+	{
+		case LMS_DEV_LIMESDR_X3:
+		case LMS_DEV_LIMESDR_QPCIE:
+			dmaBufferSize = 32768;
+			break;
+		case LMS_DEV_LIMESDR_XTRX:
+		case LMS_DEV_LIME_MM_X8:
+			dmaBufferSize = 8192;
+			break;
+		default:
+		{
+			dmaBufferSize = 8192;
+			dev_warn(&dev->dev, "DMA buffer size not specified, defaulting to %i", dmaBufferSize);
+		}
+	}
 
 	uint32_t dmaBufferCount = MAX_DMA_BUFFER_COUNT;
 	int32_t dmaChannels = litepcie_readl(litepcie_dev, CSR_CNTRL_NDMA_ADDR);
@@ -1527,23 +1605,10 @@ static void litepcie_pci_remove(struct pci_dev *dev)
 	litepcie_free_chdev(litepcie_dev);
 }
 
-static const struct lime_driver_data lime_device_QPCIE = {
-	.name = "QPCIe",
-	.dma_buffer_size = 32768
-};
-static const struct lime_driver_data lime_device_X3 = {
-	.name = "X3",
-	.dma_buffer_size = 8192
-};
-static const struct lime_driver_data lime_device_XTRX = {
-	.name = "XTRX",
-	.dma_buffer_size = 8192
-};
-
 static const struct pci_device_id litepcie_pci_ids[] = {
-	{PCI_DEVICE(XILINX_FPGA_VENDOR_ID, XILINX_FPGA_DEVICE_ID), .driver_data = (kernel_ulong_t)&lime_device_X3},
-	{PCI_DEVICE(XILINX_FPGA_VENDOR_ID, XTRX_FPGA_DEVICE_ID), .driver_data = (kernel_ulong_t)&lime_device_XTRX},
-	{PCI_DEVICE(ALTERA_FPGA_VENDOR_ID, ALTERA_FPGA_DEVICE_ID), .driver_data = (kernel_ulong_t)&lime_device_QPCIE},
+	{PCI_DEVICE(XILINX_FPGA_VENDOR_ID, XILINX_FPGA_DEVICE_ID)},
+	{PCI_DEVICE(XILINX_FPGA_VENDOR_ID, XTRX_FPGA_DEVICE_ID)},
+	{PCI_DEVICE(ALTERA_FPGA_VENDOR_ID, ALTERA_FPGA_DEVICE_ID)},
 	{0 }
 };
 MODULE_DEVICE_TABLE(pci, litepcie_pci_ids);
