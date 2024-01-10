@@ -20,6 +20,7 @@
 #include <linux/cdev.h>
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
+#include <linux/version.h>
 
 #include "litepcie.h"
 #include "csr.h"
@@ -730,7 +731,7 @@ static int litepcie_mmap(struct file *file, struct vm_area_struct *vma)
 		else
 			va = chan->dma.writer_addr[i];
 		pfn = virt_to_phys((void *)va)>>PAGE_SHIFT;
-		vma->vm_flags |= VM_DONTDUMP | VM_DONTEXPAND;
+//		vma->vm_flags |= VM_DONTDUMP | VM_DONTEXPAND;
 		/*
 		 * Note: the memory is cached, so the user must explicitly
 		 * flush the CPU caches on architectures which require it.
@@ -1624,8 +1625,11 @@ static struct pci_driver litepcie_pci_driver = {
 static int __init litepcie_module_init(void)
 {
 	int ret;
-
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 4, 0)
 	litepcie_class = class_create(THIS_MODULE, LITEPCIE_NAME);
+#else
+	litepcie_class = class_create(LITEPCIE_NAME);
+#endif
 	if (!litepcie_class) {
 		ret = -EEXIST;
 		pr_err(" Failed to create class\n");
