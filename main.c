@@ -77,7 +77,7 @@ struct deviceInfo {
 	uint8_t boardId;
 	uint8_t protocol;
 	uint8_t hardwareVer;
-	char devName[128];
+	char devName[256];
 };
 
 struct litepcie_chan {
@@ -1190,8 +1190,8 @@ static int litepcie_alloc_chdev(struct litepcie_device *s)
 
 	int index = litepcie_minor_idx;
 	char deviceName[64];
-	int suffix = 0;
-	snprintf(deviceName, sizeof(deviceName)-1, "%s%i", s->info.devName, suffix);
+	static int suffix = 0;
+	snprintf(deviceName, sizeof(deviceName)-1, "%s%i", s->info.devName, suffix++);
 
 	s->minor_base = litepcie_minor_idx;
 	for (int i = 0; i < s->channels; i++) {
@@ -1214,10 +1214,11 @@ static int litepcie_alloc_chdev(struct litepcie_device *s)
 
 	index = litepcie_minor_idx;
 	for (int i = 0; i < s->channels; i++) {
-		char tempName[64];
-		snprintf(tempName, sizeof(tempName)-1, "%s_trx%d", deviceName, i);
-		dev_info(&s->dev->dev, "Creating /dev/%s\n", tempName);
-		if (!device_create(litepcie_class, NULL, MKDEV(litepcie_major, index), NULL, tempName)) {
+		char trxName[64];
+		snprintf(trxName, sizeof(trxName)-1, "trx%d", i);
+		dev_info(&s->dev->dev, "Creating /dev/%s/%s\n", deviceName, trxName);
+		// when creating device linux replaces all '/' with a '!', so just use '!' directly
+		if (!device_create(litepcie_class, NULL, MKDEV(litepcie_major, index), NULL, "%s!%s", deviceName, trxName)) {
 			ret = -EINVAL;
 			dev_err(&s->dev->dev, "Failed to create device\n");
 			goto fail_create;
@@ -1226,8 +1227,9 @@ static int litepcie_alloc_chdev(struct litepcie_device *s)
 	}
 
 	// additionally alloc control channel
-	dev_info(&s->dev->dev, "Creating /dev/%s_control\n", deviceName);
-	if (!device_create(litepcie_class, NULL, MKDEV(litepcie_major, index), NULL, "%s_control", deviceName)) {
+	dev_info(&s->dev->dev, "Creating /dev/%s/control\n", deviceName);
+	// when creating device linux replaces all '/' with a '!', so just use '!' directly
+	if (!device_create(litepcie_class, NULL, MKDEV(litepcie_major, index), NULL, "%s!control", deviceName)) {
 		ret = -EINVAL;
 		dev_err(&s->dev->dev, "Failed to create device\n");
 		goto fail_create;
@@ -1392,7 +1394,7 @@ static int ReadInfo(struct litepcie_device* s)
     }
     s->info.serialNumber = serialNumber;
 
-    sprintf(s->info.devName, "%s", GetDeviceName(s->info.boardId));
+    sprintf(s->info.devName, "%s", "LimeSDR");
 
 	dev_info(&s->dev->dev, "[device info] %s FW:%u HW:%u PROTOCOL:%u S/N:0x%016llX \n"
 		, s->info.devName
